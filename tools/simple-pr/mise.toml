@@ -1,0 +1,25 @@
+[tools.rust]
+version = "latest"
+components = "cargo,rustc,rust-std,rustfmt,clippy"
+
+# release 빌드 후 ~/.local/bin/simple-pr 로 링크 (이후 cargo build --release만 해도 갱신됨)
+# 전역 설정(~/.config/simple-pr/.env)이 없으면 이 프로젝트의 .env를 링크해 어디서든 같은 설정을 쓴다.
+[tasks.install]
+run = '''
+cargo build --release
+mkdir -p "$HOME/.local/bin"
+ln -sf "{{config_root}}/target/release/simple-pr" "$HOME/.local/bin/simple-pr"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/simple-pr"
+if [ -f .env ] && [ ! -e "$config_dir/.env" ]; then
+  mkdir -p "$config_dir"
+  ln -s "{{config_root}}/.env" "$config_dir/.env"
+fi
+'''
+
+# [tasks.example_pr]
+# run = "simple-pr bitbucket"
+# env = { BITBUCKET_REPO_SLUG = "your_repo_slug" }
+
+# [tasks.example_pr_find]
+# run = "simple-pr bitbucket find "
+# env = { BITBUCKET_REPO_SLUG = "your_repo_slug" }

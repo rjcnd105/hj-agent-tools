@@ -1,0 +1,20 @@
+[package]
+name = "simple-pr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+# HTTP 클라이언트 (0.13부터 rustls가 기본 TLS, query()는 별도 feature)
+reqwest = { version = "0.13.5", features = ["json", "query"] }
+# CLI 파싱 (커맨드 라인 인자 처리)
+clap = { version = "4.6", features = ["derive"] }
+# JSON 직렬화/역직렬화
+serde = { version = "1.0.229", features = ["derive"] }
+# 에러 핸들링 (Monadic Error Handling을 쉽게 해줌)
+anyhow = "1.0.104"
+# 환경변수 로딩
+dotenvy = "0.15.7"
+regex = "1.13"
+# 여러 API 요청을 동시에 처리 (join_all)
+futures = "0.3.34"
