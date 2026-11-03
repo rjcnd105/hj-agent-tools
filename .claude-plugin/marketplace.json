@@ -1,0 +1,11 @@
+{
+  "name": "hj-agent-tools",
+  "owner": { "name": "rjcnd105" },
+  "plugins": [
+    {
+      "name": "hj-agent-tools",
+      "source": "./",
+      "description": "Self-made CLI tools and the skills that teach agents to use them."
+    }
+  ]
+}

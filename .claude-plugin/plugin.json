@@ -1,0 +1,7 @@
+{
+  "name": "hj-agent-tools",
+  "description": "Self-made CLI tools and the skills that teach agents to use them.",
+  "author": { "name": "rjcnd105" },
+  "repository": "https://github.com/rjcnd105/hj-agent-tools",
+  "skills": "./skills/"
+}
