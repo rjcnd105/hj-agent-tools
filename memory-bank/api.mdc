@@ -1,0 +1,35 @@
+---
+alwaysApply: true
+---
+# Atlassian Cloud API Implementation Guidelines (Bitbucket & Jira)
+
+Bitbucket 및 Jira Cloud API와 상호작용하는 코드를 작성할 때, 반드시 아래의 공식 Swagger 명세서를 최우선 소스(Source of Truth)로 참조하고 효율적인 데이터 조회 방식을 준수하십시오.
+
+## 참조 명세서 (Swagger)
+
+### Bitbucket Cloud
+
+- **API 명세서 URL:** `https://dac-static.atlassian.com/cloud/bitbucket/swagger.v3.json`
+- **대상 버전:** Bitbucket API v2.0
+
+### Jira Cloud Platform
+
+- **API 명세서 URL:** `https://dac-static.atlassian.com/cloud/jira/platform/swagger-v3.v3.json`
+- **대상 버전:** Jira Cloud Platform API v3
+
+## 주요 준수 사항
+
+1. **서버 사이드 필터링 필수 (Server-Side Filtering):**
+   - **Jira:** 대량의 데이터를 받아온 후 클라이언트(코드) 내부에서 루프를 돌며 필터링하는 방식을 **엄격히 지양**합니다. 반드시 **JQL(Jira Query Language)** 검색 API나 각 엔드포인트가 제공하는 필터 파라미터를 사용하여, 서버에서 필터링된 결과만 수신하도록 구현하십시오.
+   - **Bitbucket:** Jira와 마찬가지로 API 요청 시 쿼리 파라미터(예: `q` 파라미터)를 사용하여 서버 사이드에서 데이터를 필터링해야 합니다.
+
+2. **명세서 기반 구현:**
+   - **엔드포인트:** 명세서상의 정확한 경로(Paths)와 HTTP 메서드를 확인하십시오.
+   - **데이터 스키마:** `components/schemas`에 정의된 모델 구조와 필수/선택 필드를 정확히 파악하여 페이로드를 구성하십시오.
+
+3. **페이지네이션 (Pagination):**
+   - **Bitbucket:** `pagelen`, `page`, `next` 등의 필드를 사용하여 페이지네이션을 처리하십시오.
+   - **Jira:** `startAt`, `maxResults`, `total` 필드를 사용하여 대량 데이터 조회를 처리하십시오.
+
+4. **인증 및 에러 처리:**
+   - 명세서에 정의된 보안 스키마에 맞게 인증 헤더를 설정하고, 상태 코드별 응답 스키마에 따라 견고한 에러 핸들링을 작성하십시오.
