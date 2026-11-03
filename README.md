@@ -43,6 +43,8 @@ mise run install
 release 빌드 후 `~/.local/bin/simple-pr`를 빌드 결과물로 링크합니다. 이후에는 `cargo build --release`만 실행해도 반영됩니다.
 `~/.config/simple-pr/.env`가 없으면 이 프로젝트의 `.env`를 그 위치로 링크합니다.
 
+에이전트 스킬까지 함께 설치하려면 [hj-agent-tools](https://github.com/rjcnd105/hj-agent-tools)의 `just install`을 사용합니다. 이 경우 `~/.local/bin/simple-pr`는 링크가 아니라 빌드 결과물의 복사본입니다.
+
 ## 📖 사용 방법
 
 ### 1. 브랜치 및 Jira 이슈 찾기 (`find`)
