@@ -6,16 +6,19 @@ External skills and agent settings stay in the dotfiles repository. This plugin 
 
 ## Layout
 
-- `tools/<name>/` is a `git subtree` copy of the tool's own repository. Edit the tool there and pull it here. Never edit it in this repository.
+- `tools/<name>/` is a `git subtree` copy of the tool's own repository. Edit the tool there and pull it here. Never edit it in this repository. `tools/ego-recorder/` is the exception. It has no upstream and lives here.
 - `skills/<name>/SKILL.md` tells agents when and how to use the tool.
 
 ## Commands
 
-Requires `just`, `jj`, and `cargo`.
+Requires `just`, `jj`, `cargo`, and `bun`.
 
 - `just install` builds the tools into `~/.local/bin` and registers the plugin with every agent.
 - `just update` pulls the published plugin into every agent and rebuilds the tools.
 - `just tool-pull simple-pr` pulls the tool's upstream changes. Then push and run `just update`.
+- `just e2e-ego-recorder` exercises ego-recorder in the running ego lite against a local mock shop.
+
+ego-recorder needs one manual step, because the browser reserves it for the user. In ego lite, turn on developer mode at `chrome://extensions` and load `tools/ego-recorder/extension/dist` as an unpacked extension.
 
 Credentials stay outside this repository, in `~/.config/simple-pr/.env`.
 

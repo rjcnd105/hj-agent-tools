@@ -1,0 +1,13 @@
+{
+  "name": "ego-recorder-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/background.ts src/content.ts src/popup.ts src/input.ts --outdir dist --target browser && cp manifest.json popup.html input.html ui.css dist/",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "typescript": "^7.0.2"
+  }
+}

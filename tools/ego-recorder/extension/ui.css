@@ -1,0 +1,23 @@
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#fff, #1c1c1e);
+  --fg: light-dark(#1c1c1e, #f2f2f4);
+  --muted: light-dark(#66666c, #a0a0a8);
+  --line: light-dark(#d9d9de, #3a3a3e);
+  --accent: light-dark(#0b57d0, #8ab4f8);
+  --accent-fg: light-dark(#fff, #10203a);
+  --danger: light-dark(#b3261e, #f2b8b5);
+  --warn-bg: light-dark(#fdf0d5, #4a3a12);
+  --ok-bg: light-dark(#e3f1e5, #1f3a24);
+  font: 13px/1.45 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+input[type="text"], input[type="password"] { font: inherit; width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+code { font: 12px ui-monospace, Menlo, monospace; }

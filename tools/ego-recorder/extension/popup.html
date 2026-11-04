@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>ego-recorder</title>
+<link rel="stylesheet" href="ui.css">
+<style>
+  body { width: 360px; padding: 12px; }
+  #control { display: grid; gap: 8px; margin-bottom: 12px; }
+  #control button { width: 100%; padding: 7px 10px; }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  li { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 4px; }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 0; }
+  .chip.saved { background: var(--ok-bg); cursor: default; }
+  .chip.missing { background: var(--warn-bg); color: inherit; }
+  .actions { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<section id="control"></section>
+<p id="message" class="error" role="alert" hidden></p>
+<ul id="list"></ul>
+<script type="module" src="popup.js"></script>
+</body>
+</html>

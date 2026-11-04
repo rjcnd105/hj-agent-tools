@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>입력 필요</title>
+<link rel="stylesheet" href="ui.css">
+<style>
+  body { display: grid; justify-content: center; padding: 48px 16px; }
+  main { width: min(360px, 100%); display: grid; gap: 14px; }
+  h1 { font-size: 16px; margin: 0; }
+  form { display: grid; gap: 14px; }
+  .field { display: grid; gap: 4px; }
+  .field label.name { font-weight: 600; }
+  .hint { font-size: 12px; }
+  .save { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  button.primary { padding: 7px 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="heading">입력이 필요합니다</h1>
+  <form id="form" autocomplete="off"></form>
+  <p id="message" class="error" role="alert" hidden></p>
+</main>
+<script type="module" src="input.js"></script>
+</body>
+</html>

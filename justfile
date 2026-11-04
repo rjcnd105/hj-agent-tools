@@ -38,6 +38,15 @@ build:
     mkdir -p "{{bin_dir}}"
     install -m 755 tools/simple-pr/target/release/simple-pr "{{bin_dir}}/simple-pr.tmp"
     mv -f "{{bin_dir}}/simple-pr.tmp" "{{bin_dir}}/simple-pr"
+    cargo build --release --manifest-path tools/ego-recorder/Cargo.toml
+    install -m 755 tools/ego-recorder/target/release/ego-rec "{{bin_dir}}/ego-rec.tmp"
+    mv -f "{{bin_dir}}/ego-rec.tmp" "{{bin_dir}}/ego-rec"
+    "{{bin_dir}}/ego-rec" install
+    cd tools/ego-recorder/extension && bun install --frozen-lockfile && bun run build
+
+# Exercise ego-recorder in the running ego lite against a local mock shop
+e2e-ego-recorder: build
+    node tools/ego-recorder/e2e/run.mjs
 
 register:
     claude plugin marketplace add {{github}}

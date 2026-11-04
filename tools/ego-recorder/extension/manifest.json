@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ego-recorder",
+  "version": "0.1.0",
+  "description": "Record a login and payment session for automation.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtx8Y8YjGYwCoZ1LyQmX3fylpVG3UvLk9R3wA/Wyso+pXMO2RYT0CJg8PwfaN1tvQkHTwwhilpm6ZjhldDfO8nGJvk/2a5eC6wCbxV+Xl7FmYALcRaU8aapew2gRgcHJQFgo9gh38x2h7A5Hw86CgvhPnbW3zPb+ts2VqqRWKO6ErN/L7m1d9Apd3/xITiDMGmZqkOXi7rvkDdIte9O+wb5045Jzyd6gopSJWwxdwsp/7PZ3Vxd5O7PsP8UbJuRmt3aqv4vKJmz8XFvGqv2N7txDt4FUQ75sQ9Tc3onsBl8gt2T7kIxlV523wPnurTJLZG6gAJePlMvTj4OEYpTWYNQIDAQAB",
+  "permissions": ["debugger", "tabs", "nativeMessaging", "storage", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "ego-recorder" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_start",
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}
