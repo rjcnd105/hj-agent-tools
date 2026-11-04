@@ -1,0 +1,585 @@
+{
+ "model": "ovis",
+ "screens": {
+  "r1_cafe_bakery": {
+   "joined": "입출금 내역\n10월14일 화요일\n백다방 성수역점 -2,000원\n08:41·체크카드 / 412,300원\n두레주르 망원점 / -12,800원\n09:12·체크카드 / 414,300원\n파리바게드 합정역점 / -7,600원\n12:05·체크카드 / 427,100원\n메가MGC커피 을지로3가점 -3,000원\n13:30·체크카드 / 434,700원\n컴포즈커피 서촌점 / -1,800원\n15:47·체크카드 / 437,700원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "입출금 내역",
+     "seconds": 0.149,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월14일 화요일",
+     "seconds": 0.126,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "백다방 성수역점 -2,000원",
+     "seconds": 0.158,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "08:41·체크카드\n412,300원",
+     "seconds": 0.179,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "두레주르 망원점\n-12,800원",
+     "seconds": 0.17,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "09:12·체크카드\n414,300원",
+     "seconds": 0.214,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "파리바게드 합정역점\n-7,600원",
+     "seconds": 0.193,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "12:05·체크카드\n427,100원",
+     "seconds": 0.181,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "메가MGC커피 을지로3가점 -3,000원",
+     "seconds": 0.216,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "13:30·체크카드\n434,700원",
+     "seconds": 0.179,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "컴포즈커피 서촌점\n-1,800원",
+     "seconds": 0.181,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "15:47·체크카드\n437,700원",
+     "seconds": 0.177,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 2.12,
+   "cer": 0.0217,
+   "misses": {
+    "merchant": [
+     "빽다방 성수역점",
+     "뚜레쥬르 망원점",
+     "파리바게뜨 합정역점"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     2,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  },
+  "r2_food_card": {
+   "joined": "이용내역\n홍콩반점0410 신림점 21,000원\n26.10.16(목)·일시불\n망스터치 쌍문역점 / 9,400원\n26.10.16(목)·일시불\n본족&비빔밥cafe 노원점 / 11,500원\n26.10.15(수)·일시불\n땡겨요 쭈꾸미블루스 32,000원\n26.10.15(수)·할부2개월\n엽기떡볶이 봉천점  16,000원\n26.10.14(화)·결제취소",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "이용내역",
+     "seconds": 0.094,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "홍콩반점0410 신림점 21,000원",
+     "seconds": 0.188,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "26.10.16(목)·일시불",
+     "seconds": 0.165,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "망스터치 쌍문역점\n9,400원",
+     "seconds": 0.158,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "26.10.16(목)·일시불",
+     "seconds": 0.165,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "본족&비빔밥cafe 노원점\n11,500원",
+     "seconds": 0.196,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "26.10.15(수)·일시불",
+     "seconds": 0.164,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "땡겨요 쭈꾸미블루스 32,000원",
+     "seconds": 0.201,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "26.10.15(수)·할부2개월",
+     "seconds": 0.174,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "엽기떡볶이 봉천점  16,000원",
+     "seconds": 0.187,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "26.10.14(화)·결제취소",
+     "seconds": 0.165,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 1.86,
+   "cer": 0.0181,
+   "misses": {
+    "merchant": [
+     "맘스터치 쌍문역점",
+     "본죽&비빔밥cafe 노원점",
+     "땡겨요_쭈꾸미블루스"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     2,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     0,
+     0
+    ]
+   }
+  },
+  "r3_dark_dining": {
+   "joined": "거래내역조회\n2026.10.22\n대게나라 쫓게집-88,000원\n출금·20:14 / 잔액 231,500원\n봉추점달 낙성대점-27,000원\n출금·18:52 / 잔액 319,500원\n삼밥정식 돌안채 / -24,000원\n출금·12:20 / 잔액 346,500원\n2026.10.21\n짬짬지존 효자동점 / -9,000원\n출금·19:03 / 잔액 370,500원\n편슬기 / +45,000원\n입금·17:40 / 잔액 379,500원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "거래내역조회",
+     "seconds": 0.1,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "2026.10.22",
+     "seconds": 0.133,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "대게나라 쫓게집-88,000원",
+     "seconds": 0.173,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "출금·20:14\n잔액 231,500원",
+     "seconds": 0.201,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "봉추점달 낙성대점-27,000원",
+     "seconds": 0.171,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "출금·18:52\n잔액 319,500원",
+     "seconds": 0.196,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "삼밥정식 돌안채\n-24,000원",
+     "seconds": 0.171,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "출금·12:20\n잔액 346,500원",
+     "seconds": 0.197,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "2026.10.21",
+     "seconds": 0.131,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "짬짬지존 효자동점\n-9,000원",
+     "seconds": 0.183,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "출금·19:03\n잔액 370,500원",
+     "seconds": 0.196,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "편슬기\n+45,000원",
+     "seconds": 0.146,
+     "finish": "stop"
+    },
+    {
+     "strip": "13.png",
+     "text": "입금·17:40\n잔액 379,500원",
+     "seconds": 0.194,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 2.19,
+   "cer": 0.0372,
+   "misses": {
+    "merchant": [
+     "대게나라 꽃게찜",
+     "봉추찜닭 낙성대점",
+     "쌈밥정식 뜰안채",
+     "짬뽕지존 효자동점"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     1,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  },
+  "r4_dense_pg": {
+   "joined": "카드 결제내역\n10월 26일 일요일\n네이버페이_꿈꾸는소개방 / -18,900원\n21:44·신용·일시불 / 누적 512,300원\n카카오페이_뵙카풀사진관 -30,000원\n16:02·신용·일시불 / 누적 493,400원\n(주)비지에프리테일 CU 홍대꿈빛점 -4,300원\n14:28·체크·결제완료 / 누적 463,400원\n10월 25일 토요일\n토스페이먼츠 전빵할매손만두 / -8,000원\n11:17·신용·일시불 / 누적 459,100원\nKG이니시스_몽티기막창 / -56,000원\n22:35·신용·할부3개월 / 누적451,100원\n쿠팡이츠_떡볶기 대흥점 / -15,500원\n19:10·체크·결제취소 / 누적 395,100원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "카드 결제내역",
+     "seconds": 0.101,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월 26일 일요일",
+     "seconds": 0.13,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "네이버페이_꿈꾸는소개방\n-18,900원",
+     "seconds": 0.187,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "21:44·신용·일시불\n누적 512,300원",
+     "seconds": 0.23,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "카카오페이_뵙카풀사진관 -30,000원",
+     "seconds": 0.21,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "16:02·신용·일시불\n누적 493,400원",
+     "seconds": 0.221,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "(주)비지에프리테일 CU 홍대꿈빛점 -4,300원",
+     "seconds": 0.204,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "14:28·체크·결제완료\n누적 463,400원",
+     "seconds": 0.208,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "10월 25일 토요일",
+     "seconds": 0.118,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "토스페이먼츠 전빵할매손만두\n-8,000원",
+     "seconds": 0.196,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "11:17·신용·일시불\n누적 459,100원",
+     "seconds": 0.22,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "KG이니시스_몽티기막창\n-56,000원",
+     "seconds": 0.185,
+     "finish": "stop"
+    },
+    {
+     "strip": "13.png",
+     "text": "22:35·신용·할부3개월\n누적451,100원",
+     "seconds": 0.221,
+     "finish": "stop"
+    },
+    {
+     "strip": "14.png",
+     "text": "쿠팡이츠_떡볶기 대흥점\n-15,500원",
+     "seconds": 0.203,
+     "finish": "stop"
+    },
+    {
+     "strip": "15.png",
+     "text": "19:10·체크·결제취소\n누적 395,100원",
+     "seconds": 0.213,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 2.85,
+   "cer": 0.0282,
+   "misses": {
+    "merchant": [
+     "네이버페이_꿈꾸는뜨개방",
+     "카카오페이_쀼커플사진관",
+     "토스페이먼츠_찐빵할매손만두",
+     "KG이니시스_뭉티기막창",
+     "쿠팡이츠_떡볶끼 대흥점"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     1,
+     6
+    ],
+    "amount": [
+     6,
+     6
+    ],
+    "date": [
+     6,
+     6
+    ],
+    "type": [
+     12,
+     12
+    ],
+    "balance": [
+     6,
+     6
+    ]
+   }
+  },
+  "r5_mixed_latin": {
+   "joined": "결제 내역\n10월19일일요일\nApple.com/bill / -4,400원\n02:13·해외결제 / 772,900원\nNETFLIX.COM / -17,000원\n03:00·해외결제 / 777,300원\n배민1.쌀국수 뚝딱 / -13,900원\n12:48·체크카드 / 794,300원\n요기요 빠해장국 깍두기 -11,000원\n20:31·체크카드 / 808,200원\n곱떡 쭈꾸미 뚝배기 -26,000원\n21:55·체크카드 / 819,200원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "결제 내역",
+     "seconds": 0.092,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월19일일요일",
+     "seconds": 0.117,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "Apple.com/bill\n-4,400원",
+     "seconds": 0.144,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "02:13·해외결제\n772,900원",
+     "seconds": 0.176,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "NETFLIX.COM\n-17,000원",
+     "seconds": 0.151,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "03:00·해외결제\n777,300원",
+     "seconds": 0.174,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "배민1.쌀국수 뚝딱\n-13,900원",
+     "seconds": 0.197,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "12:48·체크카드\n794,300원",
+     "seconds": 0.175,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "요기요 빠해장국 깍두기 -11,000원",
+     "seconds": 0.188,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "20:31·체크카드\n808,200원",
+     "seconds": 0.176,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "곱떡 쭈꾸미 뚝배기 -26,000원",
+     "seconds": 0.194,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "21:55·체크카드\n819,200원",
+     "seconds": 0.209,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 1.99,
+   "cer": 0.0154,
+   "misses": {
+    "merchant": [
+     "배민1_쌀국수 뚝딱",
+     "요기요_뼈해장국 깍두기"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     3,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  }
+ }
+}

@@ -1,0 +1,579 @@
+{
+ "model": "ovis",
+ "screens": {
+  "s1_light_twocol": {
+   "joined": "입출금 내역\n10월 3일 금요일\n스타벅스 강남R점 / -6,500원\n14:12·체크카드 / 1,182,700원\nGS25 역삼힐스점 / -3,200원\n12:40·체크카드 / 1,189,200원\n김민지 / +25,000원\n11:05·입금 / 1,192,400원\n10월 2일 목요일\n맥도날드 강남역DT점 / -8,900원\n21:33·체크카드 / 1,167,400원\n쿠광(주) / -34,560원\n09:12·체크카드 / 1,176,300원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "입출금 내역",
+     "seconds": 0.596,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월 3일 금요일",
+     "seconds": 0.194,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "스타벅스 강남R점\n-6,500원",
+     "seconds": 0.176,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "14:12·체크카드\n1,182,700원",
+     "seconds": 0.233,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "GS25 역삼힐스점\n-3,200원",
+     "seconds": 0.191,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "12:40·체크카드\n1,189,200원",
+     "seconds": 0.21,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "김민지\n+25,000원",
+     "seconds": 0.166,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "11:05·입금\n1,192,400원",
+     "seconds": 0.21,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "10월 2일 목요일",
+     "seconds": 0.139,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "맥도날드 강남역DT점\n-8,900원",
+     "seconds": 0.193,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "21:33·체크카드\n1,167,400원",
+     "seconds": 0.222,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "쿠광(주)\n-34,560원",
+     "seconds": 0.188,
+     "finish": "stop"
+    },
+    {
+     "strip": "13.png",
+     "text": "09:12·체크카드\n1,176,300원",
+     "seconds": 0.215,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 2.93,
+   "cer": 0.0052,
+   "misses": {
+    "merchant": [
+     "쿠팡(주)"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     4,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  },
+  "s2_card_dated_rows": {
+   "joined": "이용내역\n올리브영 명동본점 27,800원\n26.10.13(화)·일시불\n곱창이야기 홍대점 / 86,000원\n26.10.12(월)·할부3개월\n(주)코리아세븐 4,700원\n26.10.12(월)·일시불\n커피빈 판교H스퀘어점 / 5,300원\n26.10.11(일)·결제취소\n네이버페이 결제 / 19,900원\n26.10.10(토)·일시불",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "이용내역",
+     "seconds": 0.107,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "올리브영 명동본점 27,800원",
+     "seconds": 0.19,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "26.10.13(화)·일시불",
+     "seconds": 0.186,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "곱창이야기 홍대점\n86,000원",
+     "seconds": 0.181,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "26.10.12(월)·할부3개월",
+     "seconds": 0.284,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "(주)코리아세븐 4,700원",
+     "seconds": 0.173,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "26.10.12(월)·일시불",
+     "seconds": 0.175,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "커피빈 판교H스퀘어점\n5,300원",
+     "seconds": 0.201,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "26.10.11(일)·결제취소",
+     "seconds": 0.174,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "네이버페이 결제\n19,900원",
+     "seconds": 0.162,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "26.10.10(토)·일시불",
+     "seconds": 0.174,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 2.01,
+   "cer": 0.0,
+   "misses": {
+    "merchant": [],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     5,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     0,
+     0
+    ]
+   }
+  },
+  "s3_dark_bank": {
+   "joined": "거래내역조회\n2026.10.21\n카카오텍시 / -12,300원\n출금·08:47 / 잔액 532,180원\nSK텔레콤 통신요금 / -55,000원\n자동차이체·07:00 / 잔액 544,480원\n예금이자+1,214원\n이자·00:01 / 잔액 599,480원\n2026.10.20\n이마트24 신논현점 / -2,600원\n출금·23:58 / 잔액 598,266원\n박서준 / +100,000원\n입금·19:20 / 잔액 600,866원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "거래내역조회",
+     "seconds": 0.11,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "2026.10.21",
+     "seconds": 0.212,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "카카오텍시\n-12,300원",
+     "seconds": 0.236,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "출금·08:47\n잔액 532,180원",
+     "seconds": 0.224,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "SK텔레콤 통신요금\n-55,000원",
+     "seconds": 0.174,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "자동차이체·07:00\n잔액 544,480원",
+     "seconds": 0.227,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "예금이자+1,214원",
+     "seconds": 0.165,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "이자·00:01\n잔액 599,480원",
+     "seconds": 0.343,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "2026.10.20",
+     "seconds": 0.2,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "이마트24 신논현점\n-2,600원",
+     "seconds": 0.265,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "출금·23:58\n잔액 598,266원",
+     "seconds": 0.355,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "박서준\n+100,000원",
+     "seconds": 0.259,
+     "finish": "stop"
+    },
+    {
+     "strip": "13.png",
+     "text": "입금·19:20\n잔액 600,866원",
+     "seconds": 0.328,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 3.1,
+   "cer": 0.016,
+   "misses": {
+    "merchant": [
+     "카카오T 택시"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [
+     "자동이체"
+    ],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     4,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     4,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  },
+  "s4_dense_gray": {
+   "joined": "카드 결제내역\n10월 25일 일요일\n쿠팡(주)-쿠팡이츠 서울특별시강남구 -23,400원\n19:02 · 신용 · 일시불 / 누적 412,300원\n(주)우아한형제들 배달의민족 / -18,000원\n12:31 · 신용 · 일시불 / 누적 388,900원\n한국철도공사 KTX 서울-부산 -59,800원\n07:15 · 신용 · 일시불 / 누적 370,900원\n10월 24일 토요일\nCU 신촌로터리점 / -1,800원\n23:11·체크·결제완료 / 누적 311,100원\n교보문고 광화문점 / -32,400원\n15:47 · 신용 · 할부 2개월 / 누적 309,300원\n다이소 홍대2호점 / -7,000원\n15:02 · 체크 · 결제취소 / 누적 276,900원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "카드 결제내역",
+     "seconds": 0.142,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월 25일 일요일",
+     "seconds": 0.217,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "쿠팡(주)-쿠팡이츠 서울특별시강남구 -23,400원",
+     "seconds": 0.581,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "19:02 · 신용 · 일시불\n누적 412,300원",
+     "seconds": 0.301,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "(주)우아한형제들 배달의민족\n-18,000원",
+     "seconds": 0.312,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "12:31 · 신용 · 일시불\n누적 388,900원",
+     "seconds": 0.315,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "한국철도공사 KTX 서울-부산 -59,800원",
+     "seconds": 0.282,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "07:15 · 신용 · 일시불\n누적 370,900원",
+     "seconds": 0.263,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "10월 24일 토요일",
+     "seconds": 0.174,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "CU 신촌로터리점\n-1,800원",
+     "seconds": 0.299,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "23:11·체크·결제완료\n누적 311,100원",
+     "seconds": 0.339,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "교보문고 광화문점\n-32,400원",
+     "seconds": 0.262,
+     "finish": "stop"
+    },
+    {
+     "strip": "13.png",
+     "text": "15:47 · 신용 · 할부 2개월\n누적 309,300원",
+     "seconds": 0.369,
+     "finish": "stop"
+    },
+    {
+     "strip": "14.png",
+     "text": "다이소 홍대2호점\n-7,000원",
+     "seconds": 0.265,
+     "finish": "stop"
+    },
+    {
+     "strip": "15.png",
+     "text": "15:02 · 체크 · 결제취소\n누적 276,900원",
+     "seconds": 0.319,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 4.44,
+   "cer": 0.0,
+   "misses": {
+    "merchant": [],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     6,
+     6
+    ],
+    "amount": [
+     6,
+     6
+    ],
+    "date": [
+     6,
+     6
+    ],
+    "type": [
+     12,
+     12
+    ],
+    "balance": [
+     6,
+     6
+    ]
+   }
+  },
+  "s5_rare_hangul": {
+   "joined": "결제 내역\n10월 18일 토요일\n뮐스베이커리 연남점 / -9,800원\n16:20·체크카드 / 843,200원\n톌암공장타이 쌀국수 / -14,000원\n13:05·체크카드 / 853,000원\n숯불닭갈비 춘천본점 / -41,000원\n19:44·체크카드 / 867,000원\n왕십리곱창 뜰앞점 / -38,500원\n21:10·체크카드 / 908,000원\n둘잔치떡집 쌍문점 / -22,000원\n10:31·체크카드 / 946,500원",
+   "strips": [
+    {
+     "strip": "01.png",
+     "text": "결제 내역",
+     "seconds": 0.146,
+     "finish": "stop"
+    },
+    {
+     "strip": "02.png",
+     "text": "10월 18일 토요일",
+     "seconds": 0.176,
+     "finish": "stop"
+    },
+    {
+     "strip": "03.png",
+     "text": "뮐스베이커리 연남점\n-9,800원",
+     "seconds": 0.342,
+     "finish": "stop"
+    },
+    {
+     "strip": "04.png",
+     "text": "16:20·체크카드\n843,200원",
+     "seconds": 0.308,
+     "finish": "stop"
+    },
+    {
+     "strip": "05.png",
+     "text": "톌암공장타이 쌀국수\n-14,000원",
+     "seconds": 0.292,
+     "finish": "stop"
+    },
+    {
+     "strip": "06.png",
+     "text": "13:05·체크카드\n853,000원",
+     "seconds": 0.378,
+     "finish": "stop"
+    },
+    {
+     "strip": "07.png",
+     "text": "숯불닭갈비 춘천본점\n-41,000원",
+     "seconds": 0.28,
+     "finish": "stop"
+    },
+    {
+     "strip": "08.png",
+     "text": "19:44·체크카드\n867,000원",
+     "seconds": 0.358,
+     "finish": "stop"
+    },
+    {
+     "strip": "09.png",
+     "text": "왕십리곱창 뜰앞점\n-38,500원",
+     "seconds": 0.264,
+     "finish": "stop"
+    },
+    {
+     "strip": "10.png",
+     "text": "21:10·체크카드\n908,000원",
+     "seconds": 0.274,
+     "finish": "stop"
+    },
+    {
+     "strip": "11.png",
+     "text": "둘잔치떡집 쌍문점\n-22,000원",
+     "seconds": 0.268,
+     "finish": "stop"
+    },
+    {
+     "strip": "12.png",
+     "text": "10:31·체크카드\n946,500원",
+     "seconds": 0.269,
+     "finish": "stop"
+    }
+   ],
+   "seconds": 3.35,
+   "cer": 0.0326,
+   "misses": {
+    "merchant": [
+     "뷁스베이커리 연남점",
+     "똠얌꿍타이 쌀국수",
+     "돐잔치떡집 쌍문점"
+    ],
+    "amount": [],
+    "date": [],
+    "type": [],
+    "balance": []
+   },
+   "hits": {
+    "merchant": [
+     2,
+     5
+    ],
+    "amount": [
+     5,
+     5
+    ],
+    "date": [
+     5,
+     5
+    ],
+    "type": [
+     5,
+     5
+    ],
+    "balance": [
+     5,
+     5
+    ]
+   }
+  }
+ }
+}
