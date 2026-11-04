@@ -1,0 +1,7 @@
+engine,set,hits,total
+PaddleOCR-VL-1.6 F16,base,22,26
+PaddleOCR-VL-1.6 F16,real-names,21,26
+PaddleOCR-VL-1.6 F16,degraded,22,26
+OvisOCR3 Q8_0,base,21,26
+OvisOCR3 Q8_0,real-names,17,26
+OvisOCR3 Q8_0,degraded,9,26

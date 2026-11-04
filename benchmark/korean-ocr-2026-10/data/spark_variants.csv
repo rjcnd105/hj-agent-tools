@@ -1,0 +1,7 @@
+model,disk_gb,memory_mib,load_s,first_response_s,avg_screen_s,max_screen_s,gen_tok_s,prompt_tok_s,perfect_screens,screens,rows_found,rows_expected,dates_ok,model_merchant_errors,extra_rows
+Spark-X2.5-4B Q8_0,4.38,4488,1.51,6.1,19.9,25.3,20.3,498,14,15,67,67,67,0,1
+Spark-X2.6-4B Q8_0,4.38,4488,1.50,5.0,22.2,37.7,20.3,498,15,15,67,67,67,2,0
+abenzerps X2.6-4B IQ4_XS,2.59,2790,1.25,2.9,12.2,16.2,31.8,755,15,15,67,67,67,8,0
+abenzerps X2.6-4B IQ3_M,2.28,2489,1.25,4.5,12.8,16.1,34.2,467,15,15,67,67,67,1,0
+cinnybun02 X2.6-4B Sharp Q5_K_M,2.98,3155,1.26,5.0,14.2,18.1,28.4,640,15,15,67,67,67,2,0
+Spark-X2.6-1.7B Q8_0,1.82,1914,1.51,3.5,10.5,13.8,44.5,1155,7,15,65,67,65,3,23
