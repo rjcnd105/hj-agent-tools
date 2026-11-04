@@ -1,0 +1,7 @@
+{"gpt-ko":{"body":{"model":"openai/gpt-transcribe","language":"ko"}},
+"gpt-koen":{"body":{"model":"openai/gpt-transcribe","provider":{"options":{"openai":{"languages":["ko","en"]}}}}},
+"scribe-ko":{"body":{"model":"elevenlabs/scribe-v2","language":"ko"}},
+"gemini-koen":{"body":{"model":"google/gemini-3.5-transcribe","provider":{"options":{"google-ai-studio":{"language_codes":["ko-KR","en-US"]}}}}},
+"mai-ko":{"body":{"model":"microsoft/mai-transcribe-2","language":"ko"}},
+"nemo-ko":{"body":{"model":"nvidia/nemotron-3.5-transcribe","language":"ko"}},
+"nemo-prompt":{"body":{"model":"nvidia/nemotron-3.5-transcribe","language":"ko","provider":{"options":{"deepinfra/bf16":{"prompt":"Transcribe verbatim. Write Korean words in Hangul and English words in Latin script."}}}}}}
