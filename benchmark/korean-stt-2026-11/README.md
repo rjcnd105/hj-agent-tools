@@ -221,4 +221,23 @@ python3 "$S/scripts/count_terms.py" ../results/real > ../data_new/latin_terms.cs
 
 유튜브 영상은 삭제되거나 자막이 바뀔 수 있어 같은 입력을 보장하지 않는다.
 
-음성과 자막, 모델이 받아쓴 글은 이 저장소에 없다. 이유는 [공개 범위](../README.md#공개-범위)에 적었다.
+음성과 자막은 이 저장소에 없다. 이유는 [공개 범위](../README.md#공개-범위)에 적었다.
+
+## 모델 출력
+
+모델이 받아쓴 글과 API 응답의 사용량을 고치지 않고 [`outputs/`](outputs)에 두었다. 파일 이름은 `<클립>__<설정>.json`이고 필드는 `text`, `usage`, `http`, `seconds_wall`, `attempts`다.
+
+| 폴더 | 내용 | 건수 |
+| --- | --- | --- |
+| [`outputs/real`](outputs/real) | 유튜브 21개 구간, 7개 설정 | 147 |
+| [`outputs/synth`](outputs/synth) | 합성 열화 음성 | 28 |
+
+2026-11-04에 이 파일과 측정 때의 자막으로 `scripts/score2.py`를 다시 돌려 `data/scores.csv`, `data/synthetic_scores.csv`의 CER, 삽입, 누락, 글자 수가 175건 모두 일치함을 확인했다. `scripts/count_terms.py outputs/real`의 결과도 `data/latin_terms.csv`와 같다. 자막은 바뀔 수 있으므로 새로 받은 자막으로 채점하면 값이 달라질 수 있다.
+
+API를 다시 호출하지 않고 채점하려면 입력을 만든 뒤 출력 폴더의 복사본을 지정한다. `score2.py`가 대상 폴더의 상위에 점수 파일을 쓰기 때문이다.
+
+```bash
+cp -R "$S/outputs" ../results
+python3 "$S/scripts/score2.py" . ../results/real
+python3 "$S/scripts/score2.py" . ../results/synth
+```
