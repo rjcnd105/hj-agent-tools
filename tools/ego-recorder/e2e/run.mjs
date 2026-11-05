@@ -339,7 +339,15 @@ async function main() {
     20_000,
   );
   const item = `li[data-rec="${rec}"]`;
-  const row = await popup.evaluate((sel) => document.querySelector(sel).innerText, item);
+  // The popup renders its idle state before the refreshed list arrives, so the row can still read as recording.
+  const row = await until(
+    async () => {
+      const text = await popup.evaluate((sel) => document.querySelector(sel).innerText, item);
+      return /단계/.test(text) && text;
+    },
+    "the stopped recording's row",
+    20_000,
+  );
   check(/E2E|주문|로그인/.test(row) && /단계/.test(row), "assertion 1: recording appears in the popup list with title, time and step count", row);
   check((await badge(popup)) === "", "the badge clears after stop");
 
