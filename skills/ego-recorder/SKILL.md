@@ -26,4 +26,4 @@ Exit 3 means the payment click happened and its result is unknown. Ask the user 
 ## Failures
 
 - `command not found`: report it. The install is `just install` in a checkout of https://github.com/rjcnd105/hj-agent-tools, on macOS arm64.
-- The popup shows `ego-rec install`, or the recording list is empty: report it. The extension loads from `tools/ego-recorder/extension/dist` at `chrome://extensions`, and only the user can do that.
+- The popup shows `ego-rec install`, or the recording list is empty: report it. The extension loads from `external/chrome-extensions/ego-recorder/extension/dist` at `chrome://extensions`, and only the user can do that.
