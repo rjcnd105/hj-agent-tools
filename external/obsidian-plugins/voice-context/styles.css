@@ -1,0 +1,202 @@
+.voice-context-view {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3);
+}
+
+.voice-context-view .vc-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+}
+
+.voice-context-view .vc-status {
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+}
+
+.voice-context-view .vc-status[data-status="recording"] {
+	color: var(--color-red);
+}
+
+.voice-context-view .vc-status[data-status="paused"] {
+	color: var(--color-orange);
+}
+
+.voice-context-view .vc-timer {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-large);
+	font-variant-numeric: tabular-nums;
+}
+
+.voice-context-view .vc-controls,
+.voice-context-view .vc-context-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
+.voice-context-view .vc-context-controls {
+	justify-content: flex-end;
+}
+
+.voice-context-view .vc-preset-pick {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.voice-context-view .vc-preset-pick select {
+	flex: 1;
+	min-width: 0;
+}
+
+.voice-context-view button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+}
+
+.voice-context-view .vc-btn-icon {
+	display: inline-flex;
+}
+
+.voice-context-view .vc-btn-icon svg {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+
+.voice-context-view .vc-label {
+	margin-top: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.voice-context-view .vc-live {
+	max-height: 14em;
+	overflow-y: auto;
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+	white-space: pre-wrap;
+	user-select: text;
+}
+
+.voice-context-view .vc-live.is-empty,
+.voice-context-view .vc-pending,
+.voice-context-view .vc-empty {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.voice-context-view .vc-context-input {
+	width: 100%;
+	resize: vertical;
+}
+
+.voice-context-view .vc-context-list {
+	margin: 0;
+	padding-inline-start: var(--size-4-4);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.voice-context-view .vc-context-list:empty {
+	display: none;
+}
+
+.voice-context-view .vc-session {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) 0;
+}
+
+.voice-context-view .vc-session-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--font-ui-small);
+}
+
+.voice-context-view .vc-session button {
+	flex-shrink: 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.voice-context-status[data-status="recording"] {
+	color: var(--color-red);
+}
+
+.voice-context-status[data-status="paused"] {
+	color: var(--color-orange);
+}
+
+.voice-context-status {
+	font-variant-numeric: tabular-nums;
+}
+
+.setting-item.vc-api-key {
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
+.setting-item.vc-api-key .setting-item-info {
+	flex: 1 1 100%;
+	margin-inline-end: 0;
+}
+
+.setting-item.vc-api-key .setting-item-control {
+	flex: 1 1 100%;
+	flex-wrap: nowrap;
+}
+
+.setting-item.vc-api-key input {
+	flex: 1;
+	width: 100%;
+	font-family: var(--font-monospace);
+}
+
+.internal-embed:has(> .vc-segment-delete) {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+.internal-embed:has(> .vc-segment-delete) > :is(audio, video) {
+	flex: 1;
+	min-width: 0;
+}
+
+button.vc-segment-delete {
+	flex-shrink: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+button.vc-segment-delete:hover {
+	color: var(--text-error);
+}
+
+.vc-preset {
+	flex-wrap: wrap;
+}
+
+.vc-preset .setting-item-control {
+	flex: 1 1 100%;
+	flex-wrap: wrap;
+	justify-content: flex-start;
+}
+
+.vc-preset textarea {
+	flex: 1 1 16em;
+}

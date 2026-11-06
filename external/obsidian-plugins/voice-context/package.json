@@ -1,0 +1,23 @@
+{
+	"name": "obsidian-voice-context",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Obsidian plugin: record without a modal, continue earlier recordings, and summarize with selected notes and links as context.",
+	"license": "MIT",
+	"scripts": {
+		"bundle": "bun build src/main.ts --outfile main.js --format cjs --target node --minify --external obsidian --external electron",
+		"build": "bun run deploy",
+		"dev": "bun run bundle --watch",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"check": "bun run typecheck && bun test && bun run build",
+		"e2e": "bun scripts/e2e.ts",
+		"deploy": "bun run bundle && if [ -z \"$VAULT\" ]; then echo 'VAULT is not set; skipping deploy'; else mkdir -p \"$VAULT/.obsidian/plugins/voice-context\" && cp main.js manifest.json styles.css \"$VAULT/.obsidian/plugins/voice-context/\" && echo \"deployed to $VAULT\"; fi"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.4",
+		"obsidian": "^1.14.4",
+		"typescript": "^7.0.2"
+	}
+}

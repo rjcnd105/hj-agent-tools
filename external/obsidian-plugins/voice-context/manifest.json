@@ -1,0 +1,9 @@
+{
+	"id": "voice-context",
+	"name": "Voice Context",
+	"version": "0.1.0",
+	"minAppVersion": "1.13.2",
+	"description": "Record voice notes without leaving the editor, continue earlier recordings, and summarize them with your selected notes and links as context.",
+	"author": "rjcnd105",
+	"isDesktopOnly": false
+}

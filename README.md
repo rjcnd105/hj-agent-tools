@@ -7,7 +7,7 @@ External skills and agent settings stay in the dotfiles repository. This plugin 
 ## Layout
 
 - `tools/<name>/` is a `git subtree` copy of the tool's own repository. Edit the tool there and pull it here. Never edit it in this repository.
-- `external/<kind>/<name>/` holds tools that run inside another app, grouped by host, such as `external/chrome-extensions/`. They have no upstream and live here.
+- `external/<kind>/<name>/` holds tools that run inside another app, grouped by host, such as `external/chrome-extensions/` and `external/obsidian-plugins/`. They have no upstream and live here.
 - `skills/<name>/SKILL.md` tells agents when and how to use the tool.
 
 ## Commands
@@ -20,6 +20,8 @@ Requires `just`, `jj`, `cargo`, and `bun`.
 - `just e2e-ego-recorder` exercises ego-recorder in the running ego lite against a local mock shop.
 
 ego-recorder needs one manual step, because the browser reserves it for the user. In ego lite, turn on developer mode at `chrome://extensions` and load `external/chrome-extensions/ego-recorder/extension/dist` as an unpacked extension.
+
+voice-context deploys into an Obsidian vault. In `external/obsidian-plugins/voice-context`, run `bun install`, then `VAULT=<vault path> bun run deploy`.
 
 Credentials stay outside this repository, in `~/.config/simple-pr/.env`.
 
