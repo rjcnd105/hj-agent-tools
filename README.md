@@ -9,6 +9,7 @@ External skills and agent settings stay in the dotfiles repository. This plugin 
 - `tools/<name>/` is a `git subtree` copy of the tool's own repository. Edit the tool there and pull it here. Never edit it in this repository.
 - `external/<kind>/<name>/` holds tools that run inside another app, grouped by host, such as `external/chrome-extensions/` and `external/obsidian-plugins/`. They have no upstream and live here.
 - `skills/<name>/SKILL.md` tells agents when and how to use the tool.
+- `skills/<name>/scripts/` holds a dependency-free script that the skill runs in place, with no build or install step, such as `skills/input-replay/scripts/replay.mjs`.
 
 ## Commands
 
