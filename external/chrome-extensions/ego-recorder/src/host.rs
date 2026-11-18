@@ -220,7 +220,7 @@ impl Host<'_> {
                     }
                     continue;
                 }
-                net @ CaptureEvent::Net(_) => net,
+                kept @ (CaptureEvent::Net(_) | CaptureEvent::Wheel(_)) => kept,
             };
             let mut line = serde_json::to_vec(&Spooled { seq, event })?;
             line.push(b'\n');
@@ -403,6 +403,10 @@ impl Active {
                     let deps = deps.remove(&line.seq).unwrap_or_default();
                     Stored::Net(store_net(line.seq, net, deps, &scrubber, &self.dir)?)
                 }
+                CaptureEvent::Wheel(event) => Stored::Wheel {
+                    seq: line.seq,
+                    event: scrub_as_json(&scrubber, &event)?,
+                },
                 CaptureEvent::Shot { .. } => continue,
             };
             serde_json::to_writer(&mut out, &stored)?;
@@ -432,6 +436,7 @@ fn event_time(event: &CaptureEvent) -> f64 {
         CaptureEvent::Action(e) => e.t,
         CaptureEvent::Nav(e) => e.t,
         CaptureEvent::Net(e) => e.t,
+        CaptureEvent::Wheel(e) => e.t,
         CaptureEvent::Shot { t, .. } => *t,
     }
 }
@@ -799,6 +804,50 @@ mod tests {
                 .contains("\"csrf\":\"string\"")
         );
         assert_eq!(flow.scope, "shop.test");
+    }
+
+    #[test]
+    fn wheel_gestures_are_kept_and_never_become_steps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::at(tmp.path().join("home")).unwrap();
+        let vault = MemoryVault::default();
+        let mut host = Host {
+            store: &store,
+            vault: &vault,
+            active: None,
+        };
+        let rec = host.start("https://a.test/", "A").unwrap();
+        let sample = |dt: f64, dx: f64, wdx: f64, cancelable: bool| WheelSample {
+            dt,
+            dx,
+            dy: 0.0,
+            wdx: Some(wdx),
+            wdy: Some(0.0),
+            mode: 0,
+            shift: false,
+            ctrl: false,
+            cancelable,
+        };
+        host.ingest(vec![CaptureEvent::Wheel(WheelGesture {
+            t: 2000.0,
+            tab: 1,
+            target: field(".list", |_| {}),
+            samples: vec![
+                sample(0.0, 4.0, -12.0, true),
+                sample(16.5, 9.0, -27.0, false),
+            ],
+        })])
+        .unwrap();
+        let (_, steps) = host.stop(None).unwrap();
+
+        assert_eq!(steps, 1, "only the start goto");
+        let text = crate::view::show_wheel(&store.events(&rec).unwrap());
+        assert!(
+            text.starts_with("wheel 1 +0.0s 2 events 16ms .list\n"),
+            "{text}"
+        );
+        assert!(text.contains("\n  0.0 4 0 -12 0 0 -\n"), "{text}");
+        assert!(text.contains("\n  16.5 9 0 -27 0 0 n\n"), "{text}");
     }
 
     #[test]

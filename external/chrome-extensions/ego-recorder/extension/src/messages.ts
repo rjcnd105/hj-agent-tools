@@ -1,6 +1,7 @@
 import type { ActionEvent } from "./generated/ActionEvent";
 import type { ReplyBody } from "./generated/ReplyBody";
 import type { Request } from "./generated/Request";
+import type { WheelGesture } from "./generated/WheelGesture";
 
 /** Everything the content script knows about an action. The worker adds the tab. */
 export type CapturedAction = Omit<ActionEvent, "tab">;
@@ -18,7 +19,7 @@ export type PageAnswer =
   | { ok: true; state: RecorderState; reply?: undefined }
   | { ok: false; error: string };
 
-export type ContentMessage = { to: "capture"; action: CapturedAction };
+export type ContentMessage = { to: "capture"; action: CapturedAction } | { to: "wheel"; wheel: Omit<WheelGesture, "tab"> };
 
 export const RECORDING_KEY = "recording";
 

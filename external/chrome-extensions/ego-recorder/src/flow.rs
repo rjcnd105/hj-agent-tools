@@ -1,6 +1,6 @@
 //! Agent-facing recording model, and the events it derives from.
 
-use crate::wire::{ActionEvent, NavEvent};
+use crate::wire::{ActionEvent, NavEvent, WheelGesture};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -185,6 +185,7 @@ pub enum Stored {
     Action { seq: u64, event: ActionEvent },
     Nav { seq: u64, event: NavEvent },
     Net(StoredNet),
+    Wheel { seq: u64, event: WheelGesture },
 }
 
 impl Stored {
@@ -193,6 +194,7 @@ impl Stored {
             Stored::Action { event, .. } => event.t,
             Stored::Nav { event, .. } => event.t,
             Stored::Net(net) => net.t,
+            Stored::Wheel { event, .. } => event.t,
         }
     }
 }

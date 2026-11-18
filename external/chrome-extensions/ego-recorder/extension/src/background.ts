@@ -330,6 +330,10 @@ function captureFrom(sender: chrome.runtime.MessageSender, message: ContentMessa
   const current = recording;
   const tab = sender.tab?.id;
   if (!current || current.stopping || tab === undefined || !current.tabs.has(tab)) return;
+  if (message.to === "wheel") {
+    enqueue(current, { type: "wheel", ...message.wheel, tab });
+    return;
+  }
   enqueue(current, { type: "action", ...message.action, tab });
   if (message.action.kind === "click" || message.action.kind === "submit") {
     setTimeout(() => void shoot(current, tab), SHOT_DELAY_MS);
@@ -350,7 +354,7 @@ async function answerPage(message: PageMessage): Promise<PageAnswer> {
 }
 
 chrome.runtime.onMessage.addListener((message: PageMessage | ContentMessage, sender, respond) => {
-  if (message.to === "capture") {
+  if (message.to === "capture" || message.to === "wheel") {
     captureFrom(sender, message);
     return false;
   }

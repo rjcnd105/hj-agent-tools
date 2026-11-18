@@ -45,6 +45,9 @@ enum Command {
         /// Print the path of the screenshot taken at this step
         #[arg(long)]
         shot: Option<u32>,
+        /// Wheel gestures with every sample. They never become steps
+        #[arg(long)]
+        wheel: bool,
     },
     /// Generate a runnable script
     Compile {
@@ -130,13 +133,20 @@ fn run_cli(cli: Cli) -> Result<i32> {
             step,
             net,
             shot,
+            wheel,
         } => {
-            let flow = store.flow(&id)?;
-            match (shot, step, net) {
-                (Some(n), _, _) => println!("{}", view::shot_path(&store, &flow, n)?.display()),
-                (None, step, true) => print!("{}", view::show_net(&flow, step)),
-                (None, Some(n), false) => print!("{}", view::show_step(&flow, n)?),
-                (None, None, false) => print!("{}", view::show_flow(&flow)),
+            if wheel {
+                print!("{}", view::show_wheel(&store.events(&id)?));
+            } else {
+                let flow = store.flow(&id)?;
+                match (shot, step, net) {
+                    (Some(n), _, _) => {
+                        println!("{}", view::shot_path(&store, &flow, n)?.display())
+                    }
+                    (None, step, true) => print!("{}", view::show_net(&flow, step)),
+                    (None, Some(n), false) => print!("{}", view::show_step(&flow, n)?),
+                    (None, None, false) => print!("{}", view::show_flow(&flow)),
+                }
             }
         }
         Command::Compile { id, output } => {

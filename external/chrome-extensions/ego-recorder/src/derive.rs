@@ -142,6 +142,7 @@ fn draft_steps(meta: &Meta, ordered: &[&Stored]) -> Vec<Draft> {
         Stored::Action { event, .. } => event.tab,
         Stored::Nav { event, .. } => event.tab,
         Stored::Net(net) => net.tab,
+        Stored::Wheel { event, .. } => event.tab,
     });
     if meta.start_url.starts_with("http") {
         drafts.push(goto_draft(
@@ -176,7 +177,7 @@ fn draft_steps(meta: &Meta, ordered: &[&Stored]) -> Vec<Draft> {
                     );
                 }
             }
-            Stored::Net(_) => {}
+            Stored::Net(_) | Stored::Wheel { .. } => {}
         }
     }
     drop_tabs_that_only_move_focus(&mut drafts);

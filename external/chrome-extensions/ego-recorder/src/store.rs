@@ -98,15 +98,19 @@ impl Store {
         }
     }
 
+    pub fn events(&self, id: &str) -> Result<Vec<Stored>> {
+        let events = fs::read_to_string(self.existing_dir(id)?.join("events.ndjson"))
+            .with_context(|| format!("{id} has no events; was it stopped?"))?;
+        Ok(events
+            .lines()
+            .map(serde_json::from_str::<Stored>)
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn derive_flow(&self, id: &str) -> Result<Flow> {
         let dir = self.existing_dir(id)?;
         let meta = self.meta(id)?;
-        let events = fs::read_to_string(dir.join("events.ndjson"))
-            .with_context(|| format!("{id} has no events; was it stopped?"))?;
-        let stored = events
-            .lines()
-            .map(serde_json::from_str::<Stored>)
-            .collect::<Result<Vec<_>, _>>()?;
+        let stored = self.events(id)?;
         let flow = derive(&meta, &stored, &self.shots(id)?);
         write_private(
             &dir.join("flow.json"),

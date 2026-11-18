@@ -1,6 +1,7 @@
 import type { ActionKind } from "./generated/ActionKind";
 import type { HiddenField } from "./generated/HiddenField";
 import type { Target } from "./generated/Target";
+import type { WheelSample } from "./generated/WheelSample";
 import type { ContentMessage } from "./messages";
 import { RECORDING_KEY } from "./messages";
 
@@ -8,6 +9,8 @@ const TEXT_CAP = 80;
 const HIDDEN_CAP = 50;
 const DEBOUNCE_MS = 400;
 const NAME_SCAN_CAP = 500;
+const WHEEL_IDLE_MS = 300;
+const WHEEL_SAMPLE_CAP = 1000;
 const NON_VALUE_INPUTS = new Set(["checkbox", "radio", "button", "submit", "reset", "image", "file"]);
 const IMPLICIT_ROLE: Record<string, string> = { button: "button", select: "combobox", textarea: "textbox", summary: "button" };
 const INPUT_ROLE: Record<string, string> = {
@@ -25,6 +28,8 @@ const INPUT_ROLE: Record<string, string> = {
 let active = false;
 let pendingField: Element | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let wheel: { t: number; start: number; target: Element; samples: WheelSample[] } | null = null;
+let wheelTimer: ReturnType<typeof setTimeout> | null = null;
 
 void chrome.storage.session
   .get(RECORDING_KEY)
@@ -266,3 +271,43 @@ document.addEventListener(
   },
   true,
 );
+
+function flushWheel(): void {
+  if (wheelTimer) clearTimeout(wheelTimer);
+  wheelTimer = null;
+  const gesture = wheel;
+  wheel = null;
+  if (!gesture) return;
+  const message: ContentMessage = { to: "wheel", wheel: { t: gesture.t, target: describe(gesture.target), samples: gesture.samples } };
+  void chrome.runtime.sendMessage(message).catch(() => {});
+}
+
+// Passive, so recording never changes how the page scrolls. Momentum events arrive here too.
+document.addEventListener(
+  "wheel",
+  (event) => {
+    if (!active || !event.isTrusted) return;
+    const element = targetOf(event);
+    if (!element) return;
+    wheel ??= { t: Date.now(), start: event.timeStamp, target: element, samples: [] };
+    // The legacy fields are kept because they may separate a notched wheel from a trackpad where deltaX cannot.
+    const legacy = event as WheelEvent & { wheelDeltaX?: number; wheelDeltaY?: number };
+    if (wheel.samples.length < WHEEL_SAMPLE_CAP) {
+      wheel.samples.push({
+        dt: Math.round((event.timeStamp - wheel.start) * 10) / 10,
+        dx: event.deltaX,
+        dy: event.deltaY,
+        wdx: legacy.wheelDeltaX ?? null,
+        wdy: legacy.wheelDeltaY ?? null,
+        mode: event.deltaMode,
+        shift: event.shiftKey,
+        ctrl: event.ctrlKey,
+        cancelable: event.cancelable,
+      });
+    }
+    if (wheelTimer) clearTimeout(wheelTimer);
+    wheelTimer = setTimeout(flushWheel, WHEEL_IDLE_MS);
+  },
+  { capture: true, passive: true },
+);
+window.addEventListener("pagehide", flushWheel);

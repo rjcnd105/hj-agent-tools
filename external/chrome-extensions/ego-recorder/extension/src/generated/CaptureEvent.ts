@@ -2,5 +2,6 @@
 import type { ActionEvent } from "./ActionEvent";
 import type { NavEvent } from "./NavEvent";
 import type { NetEvent } from "./NetEvent";
+import type { WheelGesture } from "./WheelGesture";
 
-export type CaptureEvent = { "type": "action" } & ActionEvent | { "type": "nav" } & NavEvent | { "type": "net" } & NetEvent | { "type": "shot", t: number, tab: number, jpeg_base64: string, };
+export type CaptureEvent = { "type": "action" } & ActionEvent | { "type": "nav" } & NavEvent | { "type": "net" } & NetEvent | { "type": "wheel" } & WheelGesture | { "type": "shot", t: number, tab: number, jpeg_base64: string, };

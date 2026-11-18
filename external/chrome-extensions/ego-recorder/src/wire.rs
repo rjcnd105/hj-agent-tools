@@ -93,6 +93,32 @@ pub struct NetEvent {
     pub failed: Option<String>,
 }
 
+/// One wheel gesture: the events until input pauses. Kept to study input devices, never a step.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WheelGesture {
+    pub t: f64,
+    pub tab: i32,
+    pub target: Target,
+    pub samples: Vec<WheelSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WheelSample {
+    /// Milliseconds since the gesture's first event, from `event.timeStamp`.
+    pub dt: f64,
+    pub dx: f64,
+    pub dy: f64,
+    /// Legacy `wheelDeltaX`/`wheelDeltaY`. Absent outside Chromium and WebKit.
+    pub wdx: Option<f64>,
+    pub wdy: Option<f64>,
+    pub mode: u32,
+    pub shift: bool,
+    pub ctrl: bool,
+    pub cancelable: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -100,6 +126,7 @@ pub enum CaptureEvent {
     Action(ActionEvent),
     Nav(NavEvent),
     Net(NetEvent),
+    Wheel(WheelGesture),
     Shot {
         t: f64,
         tab: i32,

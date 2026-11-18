@@ -257,6 +257,55 @@ pub fn show_net(flow: &Flow, step: Option<u32>) -> String {
         .collect()
 }
 
+fn number(value: Option<f64>) -> String {
+    value.map_or("-".to_string(), |v| v.to_string())
+}
+
+/// Every sample of every wheel gesture, timed from the recording's first event.
+pub fn show_wheel(events: &[Stored]) -> String {
+    let start = events.iter().map(Stored::t).fold(f64::INFINITY, f64::min);
+    let mut out = String::new();
+    let gestures = events.iter().filter_map(|e| match e {
+        Stored::Wheel { event, .. } => Some(event),
+        _ => None,
+    });
+    for (i, gesture) in gestures.enumerate() {
+        let span = gesture.samples.last().map_or(0.0, |s| s.dt);
+        writeln!(
+            out,
+            "wheel {} +{:.1}s {} events {span:.0}ms {}",
+            i + 1,
+            (gesture.t - start) / 1000.0,
+            gesture.samples.len(),
+            gesture.target.css
+        )
+        .unwrap();
+        out.push_str("  dt dx dy wdx wdy mode flags\n");
+        for s in &gesture.samples {
+            let flags: String = [(s.shift, 's'), (s.ctrl, 'c'), (!s.cancelable, 'n')]
+                .iter()
+                .filter_map(|(on, c)| on.then_some(*c))
+                .collect();
+            writeln!(
+                out,
+                "  {:.1} {} {} {} {} {} {}",
+                s.dt,
+                s.dx,
+                s.dy,
+                number(s.wdx),
+                number(s.wdy),
+                s.mode,
+                if flags.is_empty() { "-" } else { &flags }
+            )
+            .unwrap();
+        }
+    }
+    if out.is_empty() {
+        out.push_str("no wheel gestures\n");
+    }
+    out
+}
+
 pub fn shot_path(store: &Store, flow: &Flow, n: u32) -> Result<PathBuf> {
     let step = flow
         .steps
