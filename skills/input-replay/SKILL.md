@@ -9,8 +9,8 @@ description: Real-user wheel, trackpad, swipe, and tap input replayed into a web
 
 ## Replay
 
-1. Pick one step per behaviour the question names. Trackpad flick with its inertia tail: `trackpad`. Mouse wheel: `mouse` (one notch), `mouse-fast` (a quick roll), `mouse-hold` (steady rolling). A finger that leaves at speed: `swipe`. One that stops before lifting: `drag`. A recorded gesture: `wheel:<file.json>`, samples `{dt, dx, dy}` with `dt` in ms from the first sample, the shape ego-rec wheel samples have. Done when every behaviour in the question has a step.
-2. Write `--read` as an expression returning the state the question is about: the active slide, `scrollLeft`, which video plays. Done when the `start` line shows the value you expect before any input.
+1. Pick one step per behaviour the question names. Trackpad flick with its inertia tail: `trackpad`. Mouse wheel: `mouse` (one notch), `mouse-fast` (a quick roll), `mouse-hold` (steady rolling). A finger that leaves at speed: `swipe`. One that stops before lifting: `drag`. A recorded gesture: `wheel:<file.json>`, samples `{dt, dx, dy}` with `dt` in ms from the first sample. Done when every behaviour in the question has a step.
+2. Write `--read` as an expression returning the state the question is about: the active slide, `scrollLeft`, which video plays. It runs more than once per step, so it only reads. Done when the `start` line shows the value you expect before any input.
 3. Run it once per width the project checks:
 
    ```bash
@@ -58,7 +58,7 @@ Verified on an API 34 emulator with Chrome 113:
 Report these with any result, since a pass here is not a pass on a real device.
 
 - Wheel events carry no OS gesture phase, so Chrome adds no native momentum or smooth scrolling; the inertia is the event stream itself. A carousel that moved twice under a real Mac mouse wheel passed with these streams. A real mouse and trackpad give the final answer.
-- `wheelDeltaX` and `wheelDeltaY` are ±120 on every event, while a real trackpad scales them with the delta. Code that reads them, not `deltaX` and `deltaY`, sees different values.
+- `wheelDeltaX` and `wheelDeltaY` are a fixed ±120 per event, or a multiple when Chrome merges events, while a real trackpad scales them with the delta. Code that reads them, not `deltaX` and `deltaY`, sees different values.
 - The mouse streams come from one mouse on Mac Chrome. Other mice and scroll settings send other sizes: record the device in question and replay it with `wheel:<file>`.
 - Desktop touch is emulation on the desktop page: desktop user agent, `mobile: false`, the screen's DPR. Mobile layout and physics come from Android Chrome.
 - Safari has no DevTools protocol, and Playwright's desktop WebKit is not iOS Safari. Check iOS by hand in Simulator or on a phone.
