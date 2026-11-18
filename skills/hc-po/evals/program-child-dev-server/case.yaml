@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: program-child-dev-server
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  The PO starts the dev server itself as a background program child session and waits on its output
+  (hc wait <name> --output ...), not on agent status words. The design lane's brief names that server
+  session as one it may read with hc read, and leaves starting and stopping it to the PO.
