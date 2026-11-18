@@ -12,7 +12,7 @@ description: Bitbucket PR creation and lookup with the `simple-pr` CLI, from a J
 1. Push the source branch. Bitbucket sees pushed branches only.
 2. Set the repository. The configured default may be another repository, so prefix every command with `BITBUCKET_REPO_SLUG=<repo>`, taking `<repo>` from `git remote get-url origin`.
 3. Check for an existing PR: `simple-pr bitbucket find --from <branch> --all`. Each line ends with its state and destination branch. Skip creation when an OPEN PR already targets the destination.
-4. Preview: `simple-pr bitbucket create --from <branch> --to <branch> --dry-run`. Done when the printed source branch, destination branch, and title all match the request. Matching is by keyword, so pass full branch names when you know them. Add `--title "<title>"` when the generated title does not describe the change.
+4. Preview: `simple-pr bitbucket create --from <branch> --to <branch> --dry-run`. Done when the printed source branch, destination branch, and title all match the request. Matching is by keyword, so pass full branch names when you know them. Add `--title "<title>"` when the generated title does not describe the change. Add `--body "$(cat <file>)"` to set the Markdown description, and check that the dry run prints it intact.
 5. Run the same command without `--dry-run`. Done when it exits 0 and prints the PR link.
 
 ## Find a PR

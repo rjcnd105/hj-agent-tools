@@ -42,7 +42,7 @@ const FIND_HELP: &str = "\
 Output (stdout, in --from order):
   🔍 Searching PRs for ...                              first line, progress
   [<KEY>](<JIRA_HOST>/browse/<KEY>) <summary> [PR](<url>) <icon> <STATE> → <destination>    one line per linked Jira issue
-  <branch> [PR](<url>) <icon> <STATE> → <destination>   PR has no linked Jira issue
+  <title> [PR](<url>) <icon> <STATE> → <destination>    PR has no linked Jira issue
   📭 No PRs found for source branch '<keyword>'          keyword matched nothing
 
   STATE is OPEN 🟢, MERGED 🟣, DECLINED 🔴 or SUPERSEDED ⚪.
@@ -72,6 +72,9 @@ Output (stdout):
 
   With --dry-run, each key prints this line in place of Created, and no PR is opened:
   🧪 Would create: [<source branch>] -> [<target branch>] <title>
+  With --body, the description follows exactly as it would be sent:
+  📝 Body:
+  <body>
 
   After every key has been tried, the command exits 1 if any key failed.
 
@@ -80,6 +83,7 @@ Examples:
   simple-pr bitbucket create --from PROJ-123 --to dev
   simple-pr bitbucket create --from PROJ-123 PROJ-124 --to dev
   simple-pr bitbucket create --from feature/login --to dev --title \"Fix login redirect\"
+  simple-pr bitbucket create --from PROJ-123 --to dev --body \"$(cat body.md)\"
 
 See `simple-pr --help` for configuration and exit status.";
 
@@ -147,7 +151,9 @@ enum BitbucketSubcommands {
     ///
     /// PR title: --title when given. Otherwise `[<KEY>] <Jira summary>`, where KEY is the Jira key in the resolved source branch name. When the Jira lookup fails the title is `[<KEY>] Task <KEY>` and a warning goes to stderr. When the branch name has no Jira key and the branch has exactly one commit that the destination lacks, the title is that commit's subject. Otherwise it is `[<keyword>] Update from <keyword>`. Commit-message keys are not used in the title. They only appear in the PR Summary lines.
     ///
-    /// Keys are processed concurrently, and a failure for one key does not stop the others. Use --dry-run to check the resolved branches and title, and `find` to inspect existing PRs.
+    /// PR description: --body when given, sent as Markdown. Without it the PR opens with an empty description.
+    ///
+    /// Keys are processed concurrently, and a failure for one key does not stop the others. Use --dry-run to check the resolved branches, title, and body, and `find` to inspect existing PRs.
     #[command(after_long_help = CREATE_HELP)]
     Create {
         /// Keywords that each resolve to one source branch, usually Jira keys (e.g. PROJ-123)
@@ -159,7 +165,11 @@ enum BitbucketSubcommands {
         /// Use this PR title instead of generating one. Allowed with one --from keyword only
         #[arg(long)]
         title: Option<String>,
-        /// Resolve branches and title, then print them without opening a PR
+        /// Use this Markdown text as the PR description. Allowed with one --from keyword only
+        // Markdown 본문은 `- 항목`처럼 하이픈으로 시작할 수 있다
+        #[arg(long, allow_hyphen_values = true)]
+        body: Option<String>,
+        /// Resolve branches and title, then print them and the body without opening a PR
         #[arg(long)]
         dry_run: bool,
     },
@@ -173,6 +183,9 @@ enum Format {
 #[derive(Serialize)]
 struct CreatePrPayload<'a> {
     title: &'a str,
+    // 본문이 없으면 필드를 보내지 않아, --body 없는 호출의 요청이 이전과 같다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a str>,
     source: BranchRef<'a>,
     destination: BranchRef<'a>,
 }
@@ -205,6 +218,7 @@ struct RepoPrResponse {
 #[derive(Deserialize)]
 struct RepoPr {
     id: u64,
+    title: String,
     state: String,
     links: RepoLinks,
     source: RepoBranchRef,
@@ -520,7 +534,7 @@ impl AppContext {
         }
     }
 
-    async fn create_pr(&self, src_branch: &str, target_branch: &str, title: &str) -> Result<RepoPr> {
+    async fn create_pr(&self, src_branch: &str, target_branch: &str, title: &str, body: Option<&str>) -> Result<RepoPr> {
         let url = format!(
             "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests",
             self.bb_workspace, self.bb_repo
@@ -528,6 +542,7 @@ impl AppContext {
 
         let payload = CreatePrPayload {
             title,
+            description: body,
             source: BranchRef { branch: BranchName { name: src_branch } },
             destination: BranchRef { branch: BranchName { name: target_branch } },
         };
@@ -566,7 +581,7 @@ impl AppContext {
     }
 
     /// 키워드로 소스 브랜치를 찾아 제목을 정한 뒤 PR을 생성하고, 출력용으로 연결된 이슈도 함께 반환합니다.
-    async fn create_pr_for_key(&self, src_key: &str, target_branch: &str, title: Option<&str>, dry_run: bool) -> Result<KeyOutcome> {
+    async fn create_pr_for_key(&self, src_key: &str, target_branch: &str, title: Option<&str>, body: Option<&str>, dry_run: bool) -> Result<KeyOutcome> {
         let src_branch = self.find_branch(src_key).await?;
         let key = jira_key(&src_branch);
         let summary = match key {
@@ -586,7 +601,7 @@ impl AppContext {
         if dry_run {
             return Ok(KeyOutcome::WouldCreate { src_branch, title });
         }
-        let pr = self.create_pr(&src_branch, target_branch, &title).await?;
+        let pr = self.create_pr(&src_branch, target_branch, &title, body).await?;
 
         // 브랜치 이름에 키가 없으면 생성된 PR의 커밋에서 연결할 이슈를 찾는다
         let issues = match key {
@@ -596,9 +611,8 @@ impl AppContext {
         Ok(KeyOutcome::Created(pr, issues))
     }
 
-    /// 연결된 이슈마다 한 줄씩 출력하고, 연결된 이슈가 없으면 브랜치 이름으로 한 줄 출력합니다.
+    /// 연결된 이슈마다 한 줄씩 출력하고, 연결된 이슈가 없으면 PR 제목으로 한 줄 출력합니다.
     fn print_result(&self, pr: &RepoPr, issues: &[LinkedIssue], format: Format) {
-        let branch = pr.source.branch.name.as_str();
         let pr_link_str = format!("[PR]({})", pr.links.html.href);
         let icon = match pr.state.as_str() {
             "OPEN" => "🟢",
@@ -613,7 +627,7 @@ impl AppContext {
             // Future formats can be added here
             Format::Md => {
                 if issues.is_empty() {
-                    println!("{} {} {}", branch, pr_link_str, state_str);
+                    println!("{} {} {}", pr.title, pr_link_str, state_str);
                 }
                 for issue in issues {
                     let jira_link = format!("{}/browse/{}", self.jira_host, issue.key);
@@ -629,10 +643,12 @@ impl AppContext {
 async fn main() -> Result<()> {
     // 인자 파싱을 먼저 해서 --help는 환경변수 없이도 동작하게 한다
     let args = Cli::parse();
-    if let Commands::Bitbucket(BitbucketArgs { command: Some(BitbucketSubcommands::Create { from, title: Some(_), .. }), .. }) = &args.command
+    // 제목과 본문은 PR 하나를 설명하므로 --from 이 여러 개면 받지 않는다
+    if let Commands::Bitbucket(BitbucketArgs { command: Some(BitbucketSubcommands::Create { from, title, body, .. }), .. }) = &args.command
         && from.len() > 1
+        && (title.is_some() || body.is_some())
     {
-        Cli::command().error(ErrorKind::ArgumentConflict, "--title allows one --from keyword only").exit();
+        Cli::command().error(ErrorKind::ArgumentConflict, "--title and --body allow one --from keyword only").exit();
     }
     let app = AppContext::from_env()?;
 
@@ -642,6 +658,7 @@ async fn main() -> Result<()> {
                 from: bb_args.from.expect("--from is required for create mode"),
                 to: bb_args.to.expect("--to is required for create mode"),
                 title: None,
+                body: None,
                 dry_run: false,
             });
 
@@ -679,14 +696,14 @@ async fn main() -> Result<()> {
                     }
                 }
                 // 2. Create Mode
-                BitbucketSubcommands::Create { from, to, title, dry_run } => {
+                BitbucketSubcommands::Create { from, to, title, body, dry_run } => {
                     println!("🔍 Finding target branch for '{}'...", to);
                     let target_branch = app.find_branch(&to).await?;
                     println!("🎯 Target Branch: {}\n", target_branch);
                     println!("Processing {} ... ", from.join(", "));
 
                     // 키별 PR 생성은 서로 독립적이므로 동시에 처리하고, 출력은 입력 순서를 유지
-                    let results = join_all(from.iter().map(|src_key| app.create_pr_for_key(src_key, &target_branch, title.as_deref(), dry_run))).await;
+                    let results = join_all(from.iter().map(|src_key| app.create_pr_for_key(src_key, &target_branch, title.as_deref(), body.as_deref(), dry_run))).await;
 
                     let mut created = Vec::new();
                     let mut failed = 0;
@@ -694,6 +711,9 @@ async fn main() -> Result<()> {
                         match result {
                             Ok(KeyOutcome::WouldCreate { src_branch, title }) => {
                                 println!("🧪 Would create: [{}] -> [{}] {}", src_branch, target_branch, title);
+                                if let Some(body) = &body {
+                                    println!("📝 Body:\n{}", body);
+                                }
                             }
                             Ok(KeyOutcome::Created(pr, issues)) => {
                                 println!("✅ Created: [{}] -> [{}]", pr.source.branch.name, target_branch);

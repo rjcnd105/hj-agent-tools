@@ -55,6 +55,7 @@ release 빌드 후 `~/.local/bin/simple-pr`를 빌드 결과물로 링크합니�
 
 PR에 연결되는 Jira 이슈는 소스 브랜치 이름의 키(예: `feature/PROJ-123-login` → `PROJ-123`)입니다.
 브랜치 이름에 키가 없으면(예: `feature/shared-dev`) PR 커밋 메시지에 언급된 키 중 Jira에 실제로 있는 이슈를 모두 연결하고, 이슈마다 한 줄씩 출력합니다.
+연결된 이슈가 없으면 PR 제목으로 한 줄 출력합니다.
 검색은 브랜치 이름 기준이므로, 이런 PR은 `--from shared-dev`처럼 브랜치 이름으로 찾습니다.
 
 ```bash
@@ -83,6 +84,9 @@ simple-pr bitbucket create --from PROJ-123 --to dev
 # 제목을 직접 지정 (--from 키워드 1개일 때만)
 simple-pr bitbucket create --from feature/login --to dev --title "로그인 리다이렉트 수정"
 
+# 본문(Markdown)을 직접 지정 (--from 키워드 1개일 때만). --dry-run은 보낼 본문을 그대로 출력
+simple-pr bitbucket create --from PROJ-123 --to dev --body "$(cat body.md)"
+
 # 여러 브랜치 한 번에 처리 (동시에 생성)
 simple-pr bitbucket create --from PROJ-123 PROJ-124 --to dev
 ```
@@ -102,6 +106,7 @@ Processing PROJ-123 ...
 
 PR 제목은 `--title`이 있으면 그 값을 쓰고, 없으면 `[Jira 키] Jira 요약`이며, Jira 키는 찾은 소스 브랜치 이름에서 추출합니다. Jira 조회에 실패하면 경고를 출력하고 `[키] Task 키`로 생성합니다.
 브랜치 이름에 Jira 키가 없으면, 대상 브랜치에 없는 커밋이 하나일 때 그 커밋의 제목을 쓰고, 그 외에는 `[키워드] Update from 키워드`로 생성합니다.
+PR 본문은 `--body`가 있으면 그 값을 Markdown으로 보내고, 없으면 빈 본문으로 생성합니다.
 여러 키 중 하나라도 실패하면 나머지를 모두 처리한 뒤 exit code 1로 종료합니다.
 
 매칭 규칙, 출력 형식, 설정, exit code 전체는 `simple-pr --help`, `simple-pr bitbucket find --help`, `simple-pr bitbucket create --help`에서 확인할 수 있습니다.
