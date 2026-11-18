@@ -8,7 +8,7 @@ bin_dir := env("HOME") / ".local/bin"
 link_dirs := env("HOME") / ".cursor/skills " + env("HOME") / ".gemini/skills " + env("HOME") / ".config/opencode/skills"
 
 # Build the tools and register the plugin with every agent
-install: build register link
+install: build register link hc-team herdr-mods
 
 # Pull the published plugin into every agent and rebuild the tools
 update:
@@ -20,6 +20,8 @@ update:
     codex plugin marketplace upgrade {{plugin}}
     pi update {{pi_source}}
     just link
+    just hc-team
+    just herdr-mods
 
 # Pull upstream changes for one tool: just tool-pull simple-pr
 tool-pull name:
@@ -47,6 +49,36 @@ build:
 # Exercise ego-recorder in the running ego lite against a local mock shop
 e2e-ego-recorder: build
     node external/chrome-extensions/ego-recorder/e2e/run.mjs
+
+# Install the hc-team CLI wrapper and seed missing presets/routes into HC_TEAM_PRESETS_DIR (~/.agents/presets)
+hc-team:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{bin_dir}}"
+    chmod +x "$PWD/skills/hc-team/scripts/hc-team.mjs"
+    NODE_BIN="$(command -v node)"
+    cat > "{{bin_dir}}/hc-team.tmp" <<EOF
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NODE_BIN="\$(command -v node 2>/dev/null || true)"
+    if [ -z "\$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then NODE_BIN="$NODE_BIN"; fi
+    if [ -z "\$NODE_BIN" ] && [ -x "\$HOME/.local/share/mise/shims/node" ]; then NODE_BIN="\$HOME/.local/share/mise/shims/node"; fi
+    exec "\${NODE_BIN:-node}" "$PWD/skills/hc-team/scripts/hc-team.mjs" "\$@"
+    EOF
+    chmod 755 "{{bin_dir}}/hc-team.tmp"
+    mv -f "{{bin_dir}}/hc-team.tmp" "{{bin_dir}}/hc-team"
+    "{{bin_dir}}/hc-team" seed --from "$PWD/presets"
+
+# Copy the Herdr mods into the app's home, which loads them live
+herdr-mods:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
+    if [ ! -d "$home" ]; then echo "no Herdr app home at $home: mods skipped"; exit 0; fi
+    for mod in external/herdr-mods/*/; do
+      mkdir -p "$home/mods/$(basename "$mod")"
+      cp -R "$mod". "$home/mods/$(basename "$mod")/"
+    done
 
 register:
     claude plugin marketplace add {{github}}
