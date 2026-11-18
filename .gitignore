@@ -1,0 +1,5 @@
+# Per-machine Claude Code permissions
+.claude/settings.local.json
+# Written into a mod folder by `herdr-app check`
+external/herdr-mods/*/gpui-kit.d.ts
+external/herdr-mods/*/jsconfig.json
