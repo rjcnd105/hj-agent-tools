@@ -2,6 +2,37 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, agents, focused, exec, hc, home, checking, window, readTextFile, watchFolder, theme, settings, openOverlay } from "herdr";
 import { MAIN, projectSlug, parseSession, parseMeta, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } from "./model.js";
+// Copied from herdr/lib/mod-config.js by `just herdr-mods`.
+import { createModConfig, expandHome, posInt } from "./mod-config.js";
+
+const DEFAULT_CONFIG = {
+  pollMs: 10000,
+  maxWorktrees: 8,
+  statusJobs: 4,
+  claudeDir: null,
+  menuMod: "hj-menu",
+};
+const modConfig = createModConfig({
+  mod: "hj-changes",
+  envVars: ["HERDR_MOD_HJ_CHANGES_DIR"],
+  defaults: DEFAULT_CONFIG,
+  validate(parsed) {
+    return {
+      pollMs: posInt(parsed?.pollMs, DEFAULT_CONFIG.pollMs, 1000),
+      maxWorktrees: posInt(parsed?.maxWorktrees, DEFAULT_CONFIG.maxWorktrees, 1),
+      statusJobs: posInt(parsed?.statusJobs, DEFAULT_CONFIG.statusJobs, 1),
+      claudeDir: typeof parsed?.claudeDir === "string" && parsed.claudeDir.trim() ? parsed.claudeDir.trim() : null,
+      menuMod: typeof parsed?.menuMod === "string" && parsed.menuMod.trim() ? parsed.menuMod.trim() : DEFAULT_CONFIG.menuMod,
+    };
+  },
+  home, exec, readTextFile, checking,
+});
+let changesConfig = { ...DEFAULT_CONFIG };
+const mountConfig = (view, cx) => modConfig.mount(view, cx, {
+  watchFolder,
+  onConfig({ config }) { changesConfig = config; },
+  onChange(_result, cx) { cx.notify(); },
+});
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -16,7 +47,7 @@ const isClaude = (terminal) => (panes().find((p) => p.terminal === terminal)?.ap
 // the folder watch would see it, and every refresh would start the next one.
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const STATUS = ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"];
-const MAX_WORKTREES = 8, STATUS_JOBS = 4, PROMPT_CHARS = 20000;
+const PROMPT_CHARS = 20000;
 const countLines = (text) => text ? text.split("\n").length - Number(text.endsWith("\n")) : 0;
 
 // Text draws a tab as nothing: pad each to the next 4-column stop.
@@ -52,9 +83,22 @@ export default class Changes extends View {
     this.targets = []; this.selected = MAIN; this.mainCount = null; this.session = null;
     this.picks = new Map(); this.sessions = new Map(); this.metas = new Map(); this.found = new Map();
     if (checking()) return;
+    mountConfig(this, cx);
     this.refresh(cx);
     // A tick while a load runs is dropped, not queued: a slow repo must not keep the panel loading.
-    cx.timer.every(10000, (cx) => { if (window()?.active !== false && !this.loading && !this.busy) this.refresh(cx); });
+    const schedule = (cx) => {
+      this.pollTimer = cx.timer.after(changesConfig.pollMs, (cx) => {
+        if (window()?.active !== false && !this.loading && !this.busy) this.refresh(cx);
+        schedule(cx);
+      });
+    };
+    schedule(cx);
+  }
+
+  close() {
+    this.pollTimer?.cancel?.();
+    this.unwatch();
+    modConfig.unmount(this);
   }
 
   watch(root, cx) {
@@ -81,7 +125,7 @@ export default class Changes extends View {
   // The session behind the focused Claude terminal, and its subagents' worktrees that still exist.
   // Throws when a lookup fails, so the caller keeps what it shows instead of dropping the targets.
   async discover(terminal) {
-    const claude = `${home()}/.claude`;
+    const claude = changesConfig.claudeDir ? expandHome(changesConfig.claudeDir, home()) : `${home()}/.claude`;
     let pid = null;
     try { pid = JSON.parse((await hc(["get", terminal, "--json"])).stdout)?.foreground?.pid ?? null; } catch {}
     let session = pid ? parseSession(await readTextFile(`${claude}/sessions/${pid}.json`).catch(() => null)) : null;
@@ -136,8 +180,8 @@ export default class Changes extends View {
     const counts = {};
     let next = 0;
     const worker = async () => { while (next < targets.length) { const t = targets[next++]; counts[t.path] = await count(t.path); } };
-    const [mainCount] = await Promise.all([count(session.cwd), ...Array.from({ length: Math.min(STATUS_JOBS, targets.length) }, worker)]);
-    return { session, visible: visibleTargets(targets, counts).slice(0, MAX_WORKTREES), mainCount };
+    const [mainCount] = await Promise.all([count(session.cwd), ...Array.from({ length: Math.min(changesConfig.statusJobs, targets.length) }, worker)]);
+    return { session, visible: visibleTargets(targets, counts).slice(0, changesConfig.maxWorktrees), mainCount };
   }
 
   // Shows another target: nothing from the last one (files, diff, draft message) carries over.
@@ -336,7 +380,7 @@ export default class Changes extends View {
             if (!root || on || f.status === "D" || !current() || window()?.platform !== "macos") return;
             cx.stop_propagation();
             const path = `${root}/${f.path}`, at = e.position;
-            const showMenu = () => openOverlay({ mod: "hj-menu", kind: "popup", width: 160, height: 44, at, props: { path, origin: at } });
+            const showMenu = () => openOverlay({ mod: changesConfig.menuMod, kind: "popup", width: 160, height: 44, at, props: { path, origin: at } });
             if (f.status !== "U") showMenu();
             else cx.spawn(async () => {
               // "U" also includes delete/delete conflicts with no file on disk.

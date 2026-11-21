@@ -10,8 +10,39 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, checking, exec, home } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, checking, exec, home, readTextFile, watchFolder } from "herdr";
 import { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl } from "./model.js";
+// Copied from herdr/lib/mod-config.js by `just herdr-mods`.
+import { createModConfig, expandHome, posInt } from "./mod-config.js";
+
+const DEFAULT_CONFIG = {
+  serverPollMs: 12000,
+  serverRefreshMs: 2000,
+  narrowSidebarPx: 160,
+  serversEnabled: true,
+  hcTeamBin: null,
+};
+const modConfig = createModConfig({
+  mod: "hj-agents",
+  envVars: ["HERDR_MOD_HJ_AGENTS_DIR"],
+  defaults: DEFAULT_CONFIG,
+  validate(parsed) {
+    return {
+      serverPollMs: posInt(parsed?.serverPollMs, DEFAULT_CONFIG.serverPollMs, 2000),
+      serverRefreshMs: posInt(parsed?.serverRefreshMs, DEFAULT_CONFIG.serverRefreshMs, 500),
+      narrowSidebarPx: posInt(parsed?.narrowSidebarPx, DEFAULT_CONFIG.narrowSidebarPx, 44),
+      serversEnabled: typeof parsed?.serversEnabled === "boolean" ? parsed.serversEnabled : DEFAULT_CONFIG.serversEnabled,
+      hcTeamBin: typeof parsed?.hcTeamBin === "string" && parsed.hcTeamBin.trim() ? parsed.hcTeamBin.trim() : null,
+    };
+  },
+  home, exec, readTextFile, checking,
+});
+let agentsConfig = { ...DEFAULT_CONFIG };
+const mountConfig = (view, cx) => modConfig.mount(view, cx, {
+  watchFolder,
+  onConfig({ config }) { agentsConfig = config; },
+  onChange(_result, cx) { cx.notify(); },
+});
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -23,21 +54,20 @@ function find(node, id) {
 }
 
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
+const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < agentsConfig.narrowSidebarPx;
 
-const SERVER_POLL_MS = 12000, SERVER_REFRESH_MS = 2000;
 const SERVER_HEADER_PX = 30, SERVER_ROW_PX = 23, SERVER_BODY_PADDING = 4;
 let snapshot = { byTerminal: {}, detached: [] }, snapshotVersion = 0;
 let rawJson = "", inFlight = false, lastPollAt = 0, backoffUntil = 0;
 let latestTerminalKey = null, scannedTerminalKey = null;
 
 function pollAllowed(now = Date.now()) {
-  return !checking() && now >= backoffUntil && !narrow() && window()?.active !== false;
+  return agentsConfig.serversEnabled && !checking() && now >= backoffUntil && !narrow() && window()?.active !== false;
 }
 
 async function pollServers(cx) {
   const now = Date.now();
-  if (inFlight || now - lastPollAt < SERVER_REFRESH_MS || !pollAllowed(now)) return;
+  if (inFlight || now - lastPollAt < agentsConfig.serverRefreshMs || !pollAllowed(now)) return;
   inFlight = true;
   lastPollAt = now;
   scannedTerminalKey = latestTerminalKey;
@@ -47,7 +77,12 @@ async function pollServers(cx) {
     // Pass it so the scanner doesn't filter out detached listeners we can place.
     const folders = spaces().filter((s) => !s.machine && s.folder).map((s) => s.folder);
     if (folders.length) args.push("--spaces", JSON.stringify([...new Set(folders)]));
-    for (const command of ["hc-team", `${home()}/.local/bin/hc-team`]) {
+    const commands = [
+      ...(agentsConfig.hcTeamBin ? [expandHome(agentsConfig.hcTeamBin, home())] : []),
+      "hc-team",
+      `${home()}/.local/bin/hc-team`,
+    ];
+    for (const command of commands) {
       let stdout, next;
       try {
         const result = await exec(command, args, { timeout: 5000 });
@@ -153,11 +188,16 @@ export default class Agents extends View {
     this.expandedServers = new Set();
     if (props()?.view === "servers") {
       if (checking()) return;
-      cx.timer.every(SERVER_REFRESH_MS, (cx) => {
-        if (this.seenVersion !== snapshotVersion || this.seenFolded !== Boolean(shared("servers.folded"))) cx.notify();
-        // Normally Agents scans. A standalone Servers copy can bootstrap the snapshot.
-        if (snapshotVersion === 0 && Date.now() - lastPollAt >= SERVER_POLL_MS) cx.spawn(pollServers);
-      });
+      mountConfig(this, cx);
+      const schedule = (cx) => {
+        this.serverTimer = cx.timer.after(agentsConfig.serverRefreshMs, (cx) => {
+          if (this.seenVersion !== snapshotVersion || this.seenFolded !== Boolean(shared("servers.folded"))) cx.notify();
+          // Normally Agents scans. A standalone Servers copy can bootstrap the snapshot.
+          if (snapshotVersion === 0 && pollAllowed() && Date.now() - lastPollAt >= agentsConfig.serverPollMs) cx.spawn(pollServers);
+          schedule(cx);
+        });
+      };
+      schedule(cx);
       return;
     }
     this.folded = new Set();
@@ -167,10 +207,22 @@ export default class Agents extends View {
     try { this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]"); } catch { this.pendingPins = []; }
     if (!Array.isArray(this.pendingPins)) this.pendingPins = [];
     if (checking()) return;
+    mountConfig(this, cx);
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
-    cx.timer.every(SERVER_POLL_MS, (cx) => cx.spawn(pollServers));
+    const schedulePoll = (cx) => {
+      this.serverTimer = cx.timer.after(agentsConfig.serverPollMs, (cx) => {
+        if (pollAllowed()) cx.spawn(pollServers);
+        schedulePoll(cx);
+      });
+    };
+    schedulePoll(cx);
+  }
+
+  close() {
+    this.serverTimer?.cancel?.();
+    modConfig.unmount(this);
   }
 
   refreshOnTerminalChange(cx, list, all) {
@@ -185,8 +237,8 @@ export default class Agents extends View {
       try {
         // Start after the render, and coalesce changes that arrive during a scan.
         do {
-          await cx.sleep(Math.max(inFlight ? 250 : 0, lastPollAt + SERVER_REFRESH_MS - Date.now()));
-        } while (pollAllowed() && latestTerminalKey !== scannedTerminalKey && (inFlight || Date.now() - lastPollAt < SERVER_REFRESH_MS));
+          await cx.sleep(Math.max(inFlight ? 250 : 0, lastPollAt + agentsConfig.serverRefreshMs - Date.now()));
+        } while (pollAllowed() && latestTerminalKey !== scannedTerminalKey && (inFlight || Date.now() - lastPollAt < agentsConfig.serverRefreshMs));
       } finally {
         this.serverRefreshQueued = false;
       }

@@ -4,30 +4,74 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex, Button, InputState, Input, EditorState, Editor, Scrollbar } from "gpui-base";
 import {
-  checking, closeOverlay, exec, focused, hc, home, openOverlay, panes, props, run,
+  checking, closeOverlay, exec, focused, hc, home, openOverlay, panes, props, readTextFile, run,
   setShared, settings, shared, spaces, terminals, theme, watchFolder,
 } from "herdr";
 import {
   availableParents, buildLaunchArgs, buildModelSyncPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  pickDefaultParent, resolveSpaceCwd, sortAndFilterPresets,
+  pickDefaultParent, resolveSpaceCwd, sortPresets,
 } from "./model.js";
+// Copied from herdr/lib/mod-config.js by `just herdr-mods`.
+import { createModConfig, expandHome, posInt } from "./mod-config.js";
 
 const SELECT = "hj-team.select";
 const REVISION = "hj-team.presets-revision";
 const LAST_USED = "lastUsed";
-const PRESET_TIMEOUT = 8000;
-const STOP_TIMEOUT = 60000;
-const LAUNCH_TIMEOUT = 240000;
+const DEFAULT_CONFIG = {
+  hcTeamBin: null,
+  presetTimeoutMs: 8000,
+  stopTimeoutMs: 60000,
+  launchTimeoutMs: 240000,
+  visiblePresetRows: 3,
+};
+const modConfig = createModConfig({
+  mod: "hj-team",
+  envVars: ["HERDR_MOD_HJ_TEAM_DIR", "HC_TEAM_PRESETS_DIR"],
+  file: "_config.json",
+  defaults: DEFAULT_CONFIG,
+  validate(parsed) {
+    return {
+      hcTeamBin: typeof parsed?.hcTeamBin === "string" && parsed.hcTeamBin.trim() ? parsed.hcTeamBin.trim() : null,
+      presetTimeoutMs: posInt(parsed?.presetTimeoutMs, DEFAULT_CONFIG.presetTimeoutMs, 1000),
+      stopTimeoutMs: posInt(parsed?.stopTimeoutMs, DEFAULT_CONFIG.stopTimeoutMs, 5000),
+      launchTimeoutMs: posInt(parsed?.launchTimeoutMs, DEFAULT_CONFIG.launchTimeoutMs, 10000),
+      visiblePresetRows: Math.min(12, posInt(parsed?.visiblePresetRows, DEFAULT_CONFIG.visiblePresetRows, 1)),
+    };
+  },
+  home, exec, readTextFile, checking,
+});
+let teamConfig = { ...DEFAULT_CONFIG };
 let bin;
+let initialConfigPromise = null;
 
-async function team(args, timeout = PRESET_TIMEOUT) {
+async function reloadTeamConfig(cx) {
+  const { dir, config } = await modConfig.loadSafe();
+  if (JSON.stringify(config) !== JSON.stringify(teamConfig)) {
+    teamConfig = config;
+    bin = null;
+    cx?.notify?.();
+  }
+  return dir;
+}
+
+function ensureTeamConfig(cx) {
+  if (!initialConfigPromise) initialConfigPromise = reloadTeamConfig(cx);
+  return initialConfigPromise;
+}
+
+async function team(args, timeout) {
   if (checking()) return;
+  await ensureTeamConfig();
+  const effectiveTimeout = timeout ?? teamConfig.presetTimeoutMs;
+  if (teamConfig.hcTeamBin) {
+    return exec(expandHome(teamConfig.hcTeamBin, home()), args, { timeout: effectiveTimeout });
+  }
   // Resolve before running anything that mutates state; never retry a timed-out launch.
-  bin ??= exec("which", ["hc-team"], { timeout: PRESET_TIMEOUT })
+  bin ??= exec("which", ["hc-team"], { timeout: teamConfig.presetTimeoutMs })
     .then(result => result.code === 0 && result.stdout.trim() || `${home()}/.local/bin/hc-team`)
     .catch(() => `${home()}/.local/bin/hc-team`);
   const hcTeamBin = await bin;
-  return exec(hcTeamBin, args, { timeout });
+  return exec(hcTeamBin, args, { timeout: effectiveTimeout });
 }
 
 function expectSuccess(result) {
@@ -106,7 +150,10 @@ export default class Team extends View {
     this.revision = shared(REVISION);
     if (checking()) return;
     try { this.lastUsed = JSON.parse(localStorage.getItem(LAST_USED)) ?? {}; } catch { /* Ignore invalid storage. */ }
-    this.watchDirectory("presetWatch", `${home()}/.agents/presets`, cx);
+    cx.spawn(async cx => {
+      const dir = await ensureTeamConfig(cx);
+      this.watchDirectory("presetWatch", dir, cx);
+    });
   }
 
   watchDirectory(slot, dir, cx) {
@@ -122,6 +169,7 @@ export default class Team extends View {
           watch.pending = watchFolder(dir);
           const paths = await watch.pending;
           if (!paths.length || this[slot] !== watch) break;
+          if (slot === "presetWatch") await reloadTeamConfig(cx);
           this.refresh(cx);
         }
       } catch { /* The folder may not exist yet, or the host ran out of watches. */ }
@@ -189,7 +237,7 @@ export default class Team extends View {
           const saved = this.presets.find(item => item.id === this.pendingSelection);
           if (saved) this.pendingSelection = null;
           this.selectPreset(saved ?? this.presets.find(item => item.id === this.selectedId)
-            ?? sortAndFilterPresets(this.presets, this.lastUsed, "")[0]);
+            ?? sortPresets(this.presets, this.lastUsed)[0]);
         } else {
           this.routesReviewed = this.routesDoc?.reviewed;
           this.listError = message(list.reason);
@@ -294,7 +342,7 @@ export default class Team extends View {
     cx.notify();
     cx.spawn(async cx => {
       try {
-        const result = expectSuccess(await team(args, p.dialog === "confirm-stop" ? STOP_TIMEOUT : PRESET_TIMEOUT));
+        const result = expectSuccess(await team(args, p.dialog === "confirm-stop" ? teamConfig.stopTimeoutMs : teamConfig.presetTimeoutMs));
         if (p.dialog === "edit") setShared(SELECT, JSON.parse(result.stdout).id);
         if (p.dialog !== "confirm-stop") setShared(REVISION, { count: (shared(REVISION)?.count ?? 0) + 1, saved: p.dialog === "edit" });
         closeOverlay(p.overlay);
@@ -342,7 +390,7 @@ export default class Team extends View {
     cx.notify();
     cx.spawn(async cx => {
       try {
-        const result = await team(args, LAUNCH_TIMEOUT);
+        const result = await team(args, teamConfig.launchTimeoutMs);
         const success = result.code === 0;
         let output;
         try { output = JSON.parse(result.stdout); } catch (e) { if (success) throw e; }
@@ -457,7 +505,7 @@ export default class Team extends View {
   }
 
   renderPresets(t, space, allPanes, allTerminals) {
-    const entries = sortAndFilterPresets(this.presets, this.lastUsed, "");
+    const entries = sortPresets(this.presets, this.lastUsed);
     const item = entries.find(preset => preset.id === this.selectedId);
     const root = v_flex().flex_1().min_h(0);
     if (this.listError) root.child(div().flex_none().px(12).pt(8).text_size(12).text_color(t.ansi1).child(this.listError));
@@ -469,11 +517,11 @@ export default class Team extends View {
     if (!this.presets.length) {
       return root.child(panelBody("teams-presets").child(meta(t, this.context.loading ? "Loading presets…" : this.listError ? "Could not load presets." : "No presets yet. Use + New to create a team.")));
     }
-    const listHeight = Math.min(entries.length * 48, 144);
+    const listHeight = Math.min(entries.length * 48 + 24, teamConfig.visiblePresetRows * 48 + 24);
     // overflow_y_scrollbar() wraps the list and breaks absolute inset sizing; pair overflow_y_scroll() with Scrollbar.vertical.
-    root.child(div().flex_none().py(16).border_b(1).border_color(t.border)
-      .child(div().h(listHeight).relative()
-        .child(v_flex().id("preset-list").absolute().inset_0().overflow_y_scroll().px(12)
+    root.child(div().h(listHeight).flex_none().relative().border_b(1).border_color(t.border)
+      .child(v_flex().id("preset-list").absolute().inset_0().overflow_y_scroll()
+        .child(v_flex().flex_none().w_full().min_w(0).px(12).py(12)
           .children(entries.map(entry => {
             const selected = entry === item;
             return h_flex().id(`preset-${entry.id}`).h(48).flex_none().w_full().min_w(0).px(8).rounded(6)
@@ -491,8 +539,8 @@ export default class Team extends View {
                   .child(badge(t, `${entry.roleCount} ${entry.roleCount === 1 ? "role" : "roles"}`))
                   .when(entry.hasOverlay, el => el.child(badge(t, "docs/", t.ansi2))))
                 .child(div().text_size(10.5).text_color(t.dim).min_w(0).truncate().child(entry.description || "No description")));
-          })))
-        .child(Scrollbar.vertical("preset-list").mode("always").absolute().inset_0())));
+          }))))
+      .child(Scrollbar.vertical("preset-list").mode("always").absolute().inset_0()));
     const body = panelBody("teams-presets");
     if (!item) return root.child(body.child(meta(t, "Select a preset to see its roles.")));
     const preset = item.preset;

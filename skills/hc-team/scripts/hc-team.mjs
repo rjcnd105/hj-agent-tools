@@ -18,8 +18,12 @@ const runIdPattern = /^[a-z0-9]{6}$/;
 const string = { type: 'string', minLength: 1 };
 const strings = { type: 'array', items: string, default: [] };
 const command = { type: 'array', items: string, minItems: 1 };
+const expandHome = value => (value === '~' ? homedir() : value.startsWith('~/') ? join(homedir(), value.slice(2)) : value);
 export function getPresetsDir() {
-  return resolve(process.env.HC_TEAM_PRESETS_DIR || join(homedir(), '.agents', 'presets'));
+  const configured = [process.env.HERDR_MOD_HJ_TEAM_DIR, process.env.HC_TEAM_PRESETS_DIR]
+    .map(value => (typeof value === 'string' ? value.trim() : ''))
+    .find(Boolean);
+  return resolve(configured ? expandHome(configured) : join(homedir(), '.herdr', 'hj-team'));
 }
 const runsDir = join(homedir(), '.local/state/hc-team/runs');
 const builtinsDir = fileURLToPath(new URL('../../../presets/', import.meta.url));

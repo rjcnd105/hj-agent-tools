@@ -13,7 +13,36 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, terminals, props, run, hc, checking, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, terminals, props, run, hc, exec, home, checking, openOverlay, theme, window, shared, layout, settings, readTextFile, watchFolder } from "herdr";
+// Copied from herdr/lib/mod-config.js by `just herdr-mods`.
+import { createModConfig, posNum } from "./mod-config.js";
+
+const DEFAULT_CONFIG = {
+  subRowId: "hj-subtabs",
+  wheelFirstStepPx: 20,
+  wheelRepeatStepPx: 60,
+  wheelDebounceMs: 100,
+};
+const modConfig = createModConfig({
+  mod: "hj-tabs",
+  envVars: ["HERDR_MOD_HJ_TABS_DIR"],
+  defaults: DEFAULT_CONFIG,
+  validate(parsed) {
+    return {
+      subRowId: typeof parsed?.subRowId === "string" && parsed.subRowId.trim() ? parsed.subRowId.trim() : DEFAULT_CONFIG.subRowId,
+      wheelFirstStepPx: posNum(parsed?.wheelFirstStepPx, DEFAULT_CONFIG.wheelFirstStepPx),
+      wheelRepeatStepPx: posNum(parsed?.wheelRepeatStepPx, DEFAULT_CONFIG.wheelRepeatStepPx),
+      wheelDebounceMs: posNum(parsed?.wheelDebounceMs, DEFAULT_CONFIG.wheelDebounceMs, 0),
+    };
+  },
+  home, exec, readTextFile, checking,
+});
+let tabConfig = { ...DEFAULT_CONFIG };
+const mountConfig = (view, cx) => modConfig.mount(view, cx, {
+  watchFolder,
+  onConfig({ config }) { tabConfig = config; },
+  onChange(_result, cx) { cx.notify(); },
+});
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -39,8 +68,6 @@ function label(tab, lead) {
   const telling = live && live !== lead.terminal && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== lead.program.key;
   return (tab.name === prog || !tab.named) && telling ? live : base;
 }
-
-const SUB_ROW = "hj-subtabs";
 
 // Who is whose sub-tab: for each sub-tab, its top super tab and the address of
 // the terminal its first pane answers to. A super is in the same space.
@@ -124,12 +151,17 @@ function placements(all, terms, sps, fam) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
+    mountConfig(this, cx);
+  }
+
+  close() {
+    modConfig.unmount(this);
   }
 
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
@@ -147,8 +179,8 @@ export default class Tabs extends View {
     if (e.touch_phase === "started" || now - s.at > 250 || e.delta.y * s.acc < 0) Object.assign(s, { acc: 0, steps: 0 });
     s.at = now;
     s.acc += e.delta.y;
-    const need = s.steps ? 60 : 20;
-    if (Math.abs(s.acc) < need || now - s.last < 100) return;
+    const need = s.steps ? tabConfig.wheelRepeatStepPx : tabConfig.wheelFirstStepPx;
+    if (Math.abs(s.acc) < need || now - s.last < tabConfig.wheelDebounceMs) return;
     s.acc -= Math.sign(s.acc) * need;
     s.steps++;
     s.last = now;
@@ -190,7 +222,7 @@ export default class Tabs extends View {
     // Asked already: the layout catches up a moment later.
     if (this.subAsked?.want === want && Date.now() - this.subAsked.at < 1000) return;
     this.subAsked = { want, at: Date.now() };
-    run(want ? "layout.show" : "layout.hide", { id: SUB_ROW });
+    run(want ? "layout.show" : "layout.hide", { id: tabConfig.subRowId });
   }
 
   // The second row: "super", then the sub-tabs of the shown tab's family.
@@ -229,7 +261,7 @@ export default class Tabs extends View {
     // One read of each live list per render.
     const sps = spaces(), all = panes(), terms = terminals();
     const space = sps.find(p => p.active);
-    const root = layout(), subRow = find(root, SUB_ROW);
+    const root = layout(), subRow = find(root, tabConfig.subRowId);
     const spaceOf = new Map();
     for (const s of sps) for (const tab of s.tabs) spaceOf.set(tab.id, s.id);
     // Without the second row in this layout, every tab stays in the bar.

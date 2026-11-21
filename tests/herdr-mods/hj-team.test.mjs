@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
-const source = await readFile(new URL("../../external/herdr-mods/hj-team/model.js", import.meta.url));
+const source = await readFile(new URL("../../herdr/hj-team/model.js", import.meta.url));
 const {
   availableParents, buildLaunchArgs, buildModelSyncPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  pickDefaultParent, resolveSpaceCwd, sortAndFilterPresets,
+  pickDefaultParent, resolveSpaceCwd, sortPresets,
 } = await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const terminal = (address, fields = {}) => ({ address, state: "live", ...fields });
@@ -98,23 +98,11 @@ test("sorts presets by overlay, descending last-use time and alphabetical name w
     { id: "zebra", name: "Zebra" }, { id: "alpha", name: "Alpha" }, { id: "recent", name: "Recent" },
     { id: "overlay-a", name: "Overlay A", hasOverlay: true }, { id: "overlay-b", name: "Overlay B", hasOverlay: true },
   ];
-  const sorted = sortAndFilterPresets(presets, { recent: 9000, "overlay-b": 2000 }, "");
+  const sorted = sortPresets(presets, { recent: 9000, "overlay-b": 2000 });
   assert.deepEqual(sorted.map(entry => entry.id), ["overlay-b", "overlay-a", "recent", "alpha", "zebra"]);
   assert.deepEqual(presets.map(entry => entry.id), ["zebra", "alpha", "recent", "overlay-a", "overlay-b"]);
-  assert.deepEqual(sortAndFilterPresets([{ id: "constructor", name: "A" }, presets[2]], { recent: 9000 }, "").map(entry => entry.id),
+  assert.deepEqual(sortPresets([{ id: "constructor", name: "A" }, presets[2]], { recent: 9000 }).map(entry => entry.id),
     ["recent", "constructor"]);
-});
-
-test("filters case-insensitively by preset id, name, description, or merged role id and title", () => {
-  const target = {
-    id: "full-stack", name: "Delivery team", description: "Ships search changes",
-    preset: { roles: [{ id: "web-qa", title: "Browser Reviewer" }] },
-  };
-  const other = { id: "native", name: "Native", preset: { roles: [{ id: "dev", title: "Developer" }] } };
-  for (const query of ["LL-ST", "LIVERY", "SEARCH", "B-QA", " BROWSER "]) {
-    assert.deepEqual(sortAndFilterPresets([other, target], {}, query), [target]);
-  }
-  assert.deepEqual(sortAndFilterPresets([target, other], {}, "missing"), []);
 });
 
 test("builds exact launch argv with explicit parent choice and no shell escaping", () => {
@@ -183,10 +171,10 @@ test("builds a model sync prompt for the focused agent and ignores empty input",
   assert.equal(buildModelSyncPrompt({ request: "   ", modelsPath: "/p/_models.md", routesPath: "/p/_routes.json" }), null);
   const prompt = buildModelSyncPrompt({
     request: "pi - deepseek 4.1 추가해줘",
-    modelsPath: "/Users/hj/.agents/presets/_models.md",
-    routesPath: "/Users/hj/.agents/presets/_routes.json",
+    modelsPath: "/Users/hj/.herdr/hj-team/_models.md",
+    routesPath: "/Users/hj/.herdr/hj-team/_routes.json",
   });
   assert.match(prompt, /pi - deepseek 4\.1 추가해줘/);
-  assert.match(prompt, /\/Users\/hj\/\.agents\/presets\/_models\.md/);
-  assert.match(prompt, /\/Users\/hj\/\.agents\/presets\/_routes\.json/);
+  assert.match(prompt, /\/Users\/hj\/\.herdr\/hj-team\/_models\.md/);
+  assert.match(prompt, /\/Users\/hj\/\.herdr\/hj-team\/_routes\.json/);
 });

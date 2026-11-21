@@ -67,15 +67,11 @@ export function resolveSpaceCwd(space, allPanes, focusedInfo) {
     || panes.find(pane => pane.cwd)?.cwd || space.folder || null;
 }
 
-export function sortAndFilterPresets(presets, lastUsedMap, query) {
-  const needle = query.trim().toLowerCase();
+export function sortPresets(presets, lastUsedMap = {}) {
   const lastUsed = id => Object.hasOwn(lastUsedMap, id) ? lastUsedMap[id] ?? 0 : 0;
-  return presets.filter(preset => !needle || [preset.id, preset.name, preset.description,
-    ...preset.preset.roles.flatMap(role => [role.id, role.title]),
-  ].some(value => value?.toLowerCase().includes(needle)))
-    .sort((a, b) => Number(Boolean(b.hasOverlay)) - Number(Boolean(a.hasOverlay))
-      || lastUsed(b.id) - lastUsed(a.id)
-      || a.name.localeCompare(b.name));
+  return [...presets].sort((a, b) => Number(Boolean(b.hasOverlay)) - Number(Boolean(a.hasOverlay))
+    || lastUsed(b.id) - lastUsed(a.id)
+    || a.name.localeCompare(b.name));
 }
 
 export function buildLaunchArgs({ presetId, cwd, parent, selectedRoles, task, withServers }) {
@@ -124,8 +120,8 @@ export function buildModelSyncPrompt({ request, modelsPath, routesPath }) {
   return [
     `[hc-team model sync] 요청: ${trimmed}`,
     `대상 파일:`,
-    `- 수집된 모델 프로파일: ${modelsPath || "~/.agents/presets/_models.md"}`,
-    `- 공통 역할 모델 라우팅: ${routesPath || "~/.agents/presets/_routes.json"}`,
+    `- 수집된 모델 프로파일: ${modelsPath || "~/.herdr/hj-team/_models.md"}`,
+    `- 공통 역할 모델 라우팅: ${routesPath || "~/.herdr/hj-team/_routes.json"}`,
     `절차:`,
     `1. 로컬 CLI(pi --list-models, agy models, claude/codex --help 등)로 실제 사용 가능한 모델과 플래그를 확인한다.`,
     `2. 웹 검색으로 최신 커뮤니티 평가·강점·약점을 날짜와 함께 조사해 _models.md에 추가 또는 갱신한다.`,

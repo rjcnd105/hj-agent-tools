@@ -8,7 +8,7 @@ All lanes (`lane-cli`, `lane-servers`, `lane-panel`, `lane-skill`) MUST conform 
 
 Location:
 - Seed presets in repo: `presets/<id>.json`
-- User global store: `process.env.HC_TEAM_PRESETS_DIR || path.join(os.homedir(), ".agents", "presets")` (default `~/.agents/presets`, folder-linked via `nix-dots` `files/workspace/.agents`)
+- User global store: `process.env.HERDR_MOD_HJ_TEAM_DIR || process.env.HC_TEAM_PRESETS_DIR || path.join(os.homedir(), ".herdr", "hj-team")` (default `~/.herdr/hj-team`, folder-linked via `nix-dots` `files/workspace/.herdr`)
 - Project overlay folder (relative to git root, or `--cwd` if not a git repo): `docs/agent-presets/<id>/`
   - `preset.json` (partial overlay)
   - `shared.md` (shared project context pointer)
@@ -132,12 +132,12 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
 
 ### 3.1 Presets & Schema
 - `hc-team schema` — prints JSON Schema v1 document to stdout.
-- `hc-team seed [--from <dir>]` — copies missing built-in presets into the resolved presets dir (`HC_TEAM_PRESETS_DIR` or `~/.agents/presets`) without overwriting existing files.
+- `hc-team seed [--from <dir>]` — copies missing built-in presets into the resolved presets dir (`HERDR_MOD_HJ_TEAM_DIR`, `HC_TEAM_PRESETS_DIR`, or `~/.herdr/hj-team`) without overwriting existing files.
 - `hc-team preset list [--cwd <dir>] [--json]`
   - `--json` returns:
     ```json
     {
-      "presetsDir": "/Users/hj/.agents/presets",
+      "presetsDir": "/Users/hj/.herdr/hj-team",
       "projectRoot": "/Users/hj/work/app",
       "presets": [
         {
@@ -240,7 +240,7 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
 
 ## 4. Herdr Mod Contracts
 
-### 4.1 `hj-agents` (`external/herdr-mods/hj-agents/`)
+### 4.1 `hj-agents` (`herdr/hj-agents/`)
 - Pure helper module `model.js` (zero `"herdr"` / `"gpui-kit"` imports) tested in `tests/herdr-mods/hj-agents.test.mjs`.
 - Polls `exec("hc-team", ["servers", "--json"], { timeout: 5000 })` every 12s (throttled immediate refresh ≥2s when agent/terminal state changes), skipping when `checking()`, `props()?.sortMenu`, `narrow()`, or `window()?.active === false`.
 - Only calls `cx.notify()` when JSON string actually changed. Backoff to 60s on failure (e.g. `hc-team` not installed), keeping last good snapshot or empty.
@@ -252,14 +252,14 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
   - Max 3 URLs shown per owner by default + clickable `+N more` expander; fold counts (`subs.length`) count sub-sessions only (not server rows).
   - Row click opens URL (`open` on macOS, `xdg-open` on Linux, `cmd /c start` on Windows); small terminal icon button focuses owner terminal (`pane.focus` if in `panes()`, else `terminal.peek`).
 
-### 4.2 `hj-team` & `hj-tabs` (`external/herdr-mods/hj-team/`, `external/herdr-mods/hj-tabs/`)
+### 4.2 `hj-team` & `hj-tabs` (`herdr/hj-team/`, `herdr/hj-tabs/`)
 - `hj-team/mod.json`: `{ "place": "none", "title": "Agent Team Presets" }`.
 - `hj-tabs`: renders `Teams` panel button whenever `find(root, "teams")` exists in layout, and passes `[...new Set([...enabled, ...(hasTeams ? ["teams"] : [])])]` to `syncPanel`.
 - `hj-team/model.js` (pure JS, zero Herdr imports) tested in `tests/herdr-mods/hj-team.test.mjs`.
 - `hj-team/main.js`:
   - Guards all `exec` and `watchFolder` with `checking()` and dialog-role check (`props()?.dialog`).
-  - `watchFolder(this.presetsDir || home() + "/.agents/presets")` using the `presetsDir` returned by `hc-team preset list --json` (so `HC_TEAM_PRESETS_DIR` is automatically respected) with catch + 30s fallback timer; reloads immediately when watch starts.
+  - `watchFolder(this.presetsDir || home() + "/.herdr/hj-team")` using the `presetsDir` returned by `hc-team preset list --json` (so `HERDR_MOD_HJ_TEAM_DIR` / `HC_TEAM_PRESETS_DIR` are automatically respected) with catch + 30s fallback timer; reloads immediately when watch starts.
   - Two tabs: `Presets` and `Runs`.
-  - `Presets`: 2-line scrollable vertical preset list (`max_h(220)`, sorted by `hasOverlay` → `lastUsed` → name, filter `Input` when `> 8` presets), `Models` button in header (editing `_routes.json` with `--expected-sha`), Launch Bar (task `InputState` passed via `--task=<text>`, explicit Parent picker defaulting to active space's `program.agent` or `none`, role toggles, `with servers` toggle, `Launch` button with `timeout: 240000` and busy/context guard), `Init docs/` button, `Edit JSON` / `+ New` / `Delete` actions.
+  - `Presets`: 2-line scrollable vertical preset list (default 3 visible rows, configurable via `_config.json`'s `visiblePresetRows`, sorted by `hasOverlay` → `lastUsed` → name), `Models` button in header (editing `_routes.json` with `--expected-sha` and `_models.md` with focused-agent sync), Launch Bar (task `InputState` passed via `--task=<text>`, explicit Parent picker defaulting to active space's `program.agent` or `none`, role toggles, `with servers` toggle, `Launch` button with `timeout: 240000` and busy/context guard), `Init docs/` button, `Edit JSON` / `+ New` / `Delete` actions.
   - Edit/New dialog (`openOverlay({ mod: "hj-team", kind: "dialog", modal: true, width: 640, height: 560, props: { dialog: "edit", preset, isNew, globalSha } })`): uses `EditorState.new({ language: "json", value })` + `Editor`, validates & saves via `exec("hc-team", ["preset", "save", "--json", text, ...(isNew ? [] : ["--update", "--expected-id", origId, "--expected-sha", origSha])])`, displays JSON-path validation errors inline, sets `setShared("hj-team.select", savedId)` on success.
   - `Runs`: groups local `terminals()` by `labels["hc.team.run"]` LIVE (zero polling/exec!), displays each role's status + `labels["hc.team.last"]` summary, click focuses (`pane.focus` or `terminal.peek`), `Stop` button opens confirm dialog (`dialog: "confirm-stop"`) before calling `exec("hc-team", ["stop", runId], { timeout: 60000 })`.

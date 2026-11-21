@@ -14,11 +14,39 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, terminals, props, run, exec, checking, theme, home, layout, settings } from "herdr";
+import { panes, terminals, props, run, exec, checking, theme, home, layout, settings, readTextFile, watchFolder } from "herdr";
+// Copied from herdr/lib/mod-config.js by `just herdr-mods`.
+import { createModConfig } from "./mod-config.js";
 
 // A sub-agent's frame: the pale one at rest, the deep one with the keyboard.
 // `main` frames any other pane that has the keyboard: quieter than the accent.
-const BLUE = { dark: { rest: "#33435a", focus: "#5878a6", main: "#6e6e6e" }, light: { rest: "#b9c7db", focus: "#5b7cae", main: "#a3a3a3" } };
+const DEFAULT_COLORS = { dark: { rest: "#33435a", focus: "#5878a6", main: "#6e6e6e" }, light: { rest: "#b9c7db", focus: "#5b7cae", main: "#a3a3a3" } };
+const hex = (v, fallback) => typeof v === "string" && /^#[0-9a-fA-F]{6,8}$/.test(v.trim()) ? v.trim() : fallback;
+const modConfig = createModConfig({
+  mod: "hj-pane",
+  envVars: ["HERDR_MOD_HJ_PANE_DIR"],
+  defaults: { colors: DEFAULT_COLORS },
+  validate(parsed) {
+    const pick = (mode) => ({
+      rest: hex(parsed?.colors?.[mode]?.rest, DEFAULT_COLORS[mode].rest),
+      focus: hex(parsed?.colors?.[mode]?.focus, DEFAULT_COLORS[mode].focus),
+      main: hex(parsed?.colors?.[mode]?.main, DEFAULT_COLORS[mode].main),
+    });
+    return { colors: { dark: pick("dark"), light: pick("light") } };
+  },
+  home, exec, readTextFile, checking,
+});
+let paneColors = { dark: { ...DEFAULT_COLORS.dark }, light: { ...DEFAULT_COLORS.light } };
+let configRevision = 0;
+const mountConfig = (view, cx) => modConfig.mount(view, cx, {
+  watchFolder,
+  onConfig({ config }) {
+    paneColors = config.colors;
+    configRevision++;
+    sweep();
+  },
+  onChange(_result, cx) { cx.notify(); },
+});
 
 // What the layout leaves to this mod: `focus` when its own focus frame doesn't
 // differ from its border, `rest` when it draws no border.
@@ -56,7 +84,7 @@ async function frame() {
   const look_of = (n) => [line(n.border), line(n.focus?.border), line(n.divider), n.radius ?? ""].join("|");
   for (let attempt = 0; attempt < 3; attempt++) {
     // Read on every attempt: the appearance can change while a write waits.
-    const blue = BLUE[settings().dark ? "dark" : "light"];
+    const blue = paneColors[settings().dark ? "dark" : "light"];
     const { rest, focus, radius } = duty(paneFrame(layout()));
     const kids = new Set(terminals().filter((k) => k.parent).map((k) => k.address));
     const doc = await core("doc.get", { name: "herdr-app" });
@@ -84,7 +112,7 @@ async function frame() {
         return;
       }
       // Clear a previous group frame if its panes change, without removing unrelated focus styles.
-      const wasGroup = Object.values(BLUE).some((colors) =>
+      const wasGroup = [...Object.values(DEFAULT_COLORS), ...Object.values(paneColors)].some((colors) =>
         node.border?.width === 1 && node.border.color === colors.rest &&
         node.focus?.border?.width === 1 && node.focus.border.color === colors.focus);
       put(node, {
@@ -152,7 +180,12 @@ function folder(cwd) {
 export default class Pane extends View {
   init(_props, cx) {
     this.hovered = false;
+    mountConfig(this, cx);
     this.paint(cx, this.frameKey(panes(), paneFrame(layout()), settings().dark));
+  }
+
+  close() {
+    modConfig.unmount(this);
   }
 
   // Asks for the frames once. Off the render path: it runs a program.
@@ -181,7 +214,7 @@ export default class Pane extends View {
   // mod, and how many panes there are (one that closes can leave sub-agents alone together).
   frameKey(all, look, dark) {
     const mine = duty(look);
-    return `${dark} ${mine.rest} ${mine.focus} ${mine.radius} ${all.length}`;
+    return `${dark} ${mine.rest} ${mine.focus} ${mine.radius} ${all.length} ${configRevision}`;
   }
 
   button(t, id, icon, command, args) {
@@ -212,7 +245,7 @@ export default class Pane extends View {
     const look = paneFrame(layout());
     const bottom = look?.header?.position === "bottom";
     const dark = settings().dark;
-    const blue = BLUE[dark ? "dark" : "light"];
+    const blue = paneColors[dark ? "dark" : "light"];
     const line = parent ? (p.focused ? blue.focus : blue.rest) : t.border;
     // A switch between light and dark, or a layout edit, changes the frames.
     const key = this.frameKey(all, look, dark);

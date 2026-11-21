@@ -31,12 +31,12 @@ function sandbox(t) {
   const config = join(cwd, 'fake.json');
   const log = join(cwd, 'fake.jsonl');
   const bin = join(cwd, 'bin');
-  const presets = join(home, '.agents/presets');
+  const presets = join(home, '.herdr/hj-team');
   mkdirSync(home);
   mkdirSync(bin);
   writeFileSync(config, '{}');
   writeFileSync(log, '');
-  const env = { ...process.env, HOME: home, HC_TEAM_PRESETS_DIR: '', HC_TERMINAL_ID: '', HC_FAKE_CONFIG: config, HC_FAKE_LOG: log, PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, HOME: home, HERDR_MOD_HJ_TEAM_DIR: '', HC_TEAM_PRESETS_DIR: '', HC_TERMINAL_ID: '', HC_FAKE_CONFIG: config, HC_FAKE_LOG: log, PATH: `${bin}:${process.env.PATH}` };
   const command = (args, options = {}) => spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf8', cwd, timeout: 25000, ...options, env: { ...env, ...options.env },
   });
@@ -186,11 +186,13 @@ test('overlay shallow-merges roles, replaces servers and arrays, and validates f
   assert.deepEqual(JSON.parse(result.stdout).error.issues, [{ path: '/roles/0/talksTo/0', message: 'Unknown role qa' }]);
 });
 
-test('seed and preset CRUD honor HC_TEAM_PRESETS_DIR, validate all input forms, and never overwrite implicitly', t => {
+test('seed and preset CRUD honor HERDR_MOD_HJ_TEAM_DIR and HC_TEAM_PRESETS_DIR, validate all input forms, and never overwrite implicitly', t => {
   const box = sandbox(t);
   const dir = join(box.cwd, 'custom presets');
-  const env = { HC_TEAM_PRESETS_DIR: dir };
+  const legacyDir = join(box.cwd, 'legacy presets');
+  const env = { HERDR_MOD_HJ_TEAM_DIR: dir, HC_TEAM_PRESETS_DIR: legacyDir };
   const options = { env };
+  assert.equal(box.json(['preset', 'list'], { env: { HERDR_MOD_HJ_TEAM_DIR: '   ', HC_TEAM_PRESETS_DIR: legacyDir } }).presetsDir, legacyDir);
   // Every shipped preset (`_` files are routing data, not presets), so adding one doesn't break this test.
   const expected = readdirSync(fileURLToPath(new URL('../presets/', import.meta.url)))
     .filter(name => name.endsWith('.json') && !name.startsWith('_')).map(name => name.slice(0, -5)).sort();

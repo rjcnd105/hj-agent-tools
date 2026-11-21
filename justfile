@@ -50,7 +50,7 @@ build:
 e2e-ego-recorder: build
     node external/chrome-extensions/ego-recorder/e2e/run.mjs
 
-# Install the hc-team CLI wrapper and seed missing presets/routes into HC_TEAM_PRESETS_DIR (~/.agents/presets)
+# Install the hc-team CLI wrapper and seed missing presets/routes into HERDR_MOD_HJ_TEAM_DIR (~/.herdr/hj-team)
 hc-team:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -69,15 +69,17 @@ hc-team:
     mv -f "{{bin_dir}}/hc-team.tmp" "{{bin_dir}}/hc-team"
     "{{bin_dir}}/hc-team" seed --from "$PWD/presets"
 
-# Copy the Herdr mods into the app's home, which loads them live
+# Copy the Herdr mods (and shared mod-config helper) into the app's home, which loads them live
 herdr-mods:
     #!/usr/bin/env bash
     set -euo pipefail
     home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
     if [ ! -d "$home" ]; then echo "no Herdr app home at $home: mods skipped"; exit 0; fi
-    for mod in external/herdr-mods/*/; do
-      mkdir -p "$home/mods/$(basename "$mod")"
-      cp -R "$mod". "$home/mods/$(basename "$mod")/"
+    for mod in herdr/hj-*/; do
+      dest="$home/mods/$(basename "$mod")"
+      mkdir -p "$dest"
+      cp -f herdr/lib/mod-config.js "$dest/mod-config.js"
+      rsync -a --delete --exclude=gpui-kit.d.ts --exclude=jsconfig.json --exclude=mod-config.js "$mod" "$dest/"
     done
 
 register:

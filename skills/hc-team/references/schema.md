@@ -13,7 +13,7 @@
 | `servers` | No | Array of server objects. | `[]` |
 | `roles` | Yes | Array of 1–12 role objects. | — |
 
-The root must be an object. Unknown top-level keys are rejected. Built-in seeds live in `presets/<id>.json`. The global user store resolves to `HC_TEAM_PRESETS_DIR` when set and non-empty, otherwise `~/.agents/presets` (folder-linked from `files/workspace/.agents/presets` in `nix-dots`). Each preset is stored as `<id>.json`.
+The root must be an object. Unknown top-level keys are rejected. Built-in seeds live in `presets/<id>.json`. The global user store resolves to `HERDR_MOD_HJ_TEAM_DIR` when set and non-empty, else `HC_TEAM_PRESETS_DIR` for compatibility, otherwise `~/.herdr/hj-team` (folder-linked from `files/workspace/.herdr` in `nix-dots`). Each preset is stored as `<id>.json`.
 
 ### Server fields
 

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
-const source = await readFile(new URL("../../external/herdr-mods/hj-agents/model.js", import.meta.url));
+const source = await readFile(new URL("../../herdr/hj-agents/model.js", import.meta.url));
 const { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl } =
   await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
