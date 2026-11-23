@@ -69,7 +69,7 @@ hc-team:
     mv -f "{{bin_dir}}/hc-team.tmp" "{{bin_dir}}/hc-team"
     "{{bin_dir}}/hc-team" seed --from "$PWD/presets"
 
-# Copy the Herdr mods (and shared mod-config helper) into the app's home, which loads them live
+# Copy the Herdr mods (and the shared helpers in herdr/lib) into the app's home, which loads them live
 herdr-mods:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -78,8 +78,9 @@ herdr-mods:
     for mod in herdr/hj-*/; do
       dest="$home/mods/$(basename "$mod")"
       mkdir -p "$dest"
-      cp -f herdr/lib/mod-config.js "$dest/mod-config.js"
-      rsync -a --delete --exclude=gpui-kit.d.ts --exclude=jsconfig.json --exclude=mod-config.js "$mod" "$dest/"
+      libs=()
+      for lib in herdr/lib/*.js; do cp -f "$lib" "$dest/"; libs+=("--exclude=$(basename "$lib")"); done
+      rsync -a --delete --exclude=gpui-kit.d.ts --exclude=jsconfig.json "${libs[@]}" "$mod" "$dest/"
     done
 
 register:

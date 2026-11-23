@@ -4,7 +4,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex, Button, InputState, Input, EditorState, Editor, Scrollbar } from "gpui-base";
 import {
-  checking, closeOverlay, exec, focused, hc, home, openOverlay, panes, props, readTextFile, run,
+  checking, closeOverlay, exec, focused, hc, home, layout, openOverlay, panes, props, readTextFile, run,
   setShared, settings, shared, spaces, terminals, theme, watchFolder,
 } from "herdr";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
+import { shownIn } from "./shown.js";
 
 const SELECT = "hj-team.select";
 const REVISION = "hj-team.presets-revision";
@@ -161,26 +162,49 @@ export default class Team extends View {
     const previous = this[slot];
     const watch = this[slot] = dir ? { dir } : null;
     previous?.pending?.cancel();
-    previous?.retry?.cancel();
-    if (!watch) return;
+    if (watch) this.runWatch(slot, watch, cx);
+  }
+
+  // The loop parks, holding no watch and no timer, while the Team block is hidden and when the
+  // folder can't be watched (it doesn't exist yet, or no watch was free). wakeWatches() resumes it
+  // from render.
+  runWatch(slot, watch, cx) {
+    watch.parked = 0;
     cx.spawn(async cx => {
+      let failed = false;
       try {
-        while (this[slot] === watch) {
-          watch.pending = watchFolder(dir);
+        while (this[slot] === watch && shownIn(layout(), "hj-team")) {
+          watch.pending = watchFolder(watch.dir);
           const paths = await watch.pending;
-          if (!paths.length || this[slot] !== watch) break;
+          if (this[slot] !== watch) return;
+          if (!paths.length) { failed = true; break; }
           if (slot === "presetWatch") await reloadTeamConfig(cx);
           this.refresh(cx);
         }
-      } catch { /* The folder may not exist yet, or the host ran out of watches. */ }
-      if (this[slot] !== watch) return;
-      watch.retry = cx.timer.after(30000, cx => {
-        if (this[slot] !== watch) return;
-        this[slot] = null;
-        this.watchDirectory(slot, dir, cx);
+      } catch { failed = true; }
+      if (this[slot] === watch) Object.assign(watch, { pending: null, parked: Date.now(), failed });
+    });
+  }
+
+  // A watch parked while hidden resumes at once and reloads what changed meanwhile. A failed one
+  // checks at most every 30 seconds whether its folder exists now, with one `test`, not a refresh.
+  wakeWatches(cx) {
+    for (const slot of ["presetWatch", "overlayWatch"]) {
+      const watch = this[slot];
+      if (!watch?.parked || (watch.failed && Date.now() - watch.parked < 30000)) continue;
+      const failed = watch.failed;
+      if (failed) watch.parked = Date.now();
+      else this.runWatch(slot, watch, cx);
+      cx.spawn(async cx => {
+        if (failed) {
+          if ((await exec("test", ["-d", watch.dir]).catch(() => null))?.code !== 0) return;
+          if (this[slot] !== watch || !watch.parked) return;
+          this.runWatch(slot, watch, cx);
+        }
+        if (slot === "presetWatch") await reloadTeamConfig(cx);
         this.refresh(cx);
       });
-    });
+    }
   }
 
   syncPresets(space, allPanes, cx) {
@@ -605,6 +629,7 @@ export default class Team extends View {
   render(cx) {
     const t = theme(), p = props();
     if (p?.dialog) return this.dialog(t, p);
+    this.wakeWatches(cx);
     const space = spaces().find(s => s.active), allPanes = panes(), allTerminals = terminals();
     this.syncPresets(space, allPanes, cx);
     const runs = groupRuns(allTerminals), notice = this.notice;

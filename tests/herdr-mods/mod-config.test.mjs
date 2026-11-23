@@ -112,16 +112,19 @@ test("createModConfig mount notifies every mounted view on config change and rec
 
   let latest = null;
   const v1 = { id: "v1" }, v2 = { id: "v2" };
-  const opts = { watchFolder, onConfig: ({ config }) => { latest = config.pollMs; }, onChange: (_r, cx) => cx.notify() };
+  const opts = { watchFolder, retryMs: 0, onConfig: ({ config }) => { latest = config.pollMs; }, onChange: (_r, cx) => cx.notify() };
   cfg.mount(v1, makeCx("v1"), opts);
   cfg.mount(v2, makeCx("v2"), opts);
   await flush();
   assert.equal(latest, 5000);
   assert.deepEqual(notified, ["v1", "v2"]);
 
-  // Retry after missing folder and hand off when v1 closes; changing the file notifies v2.
-  retryCb(makeCx("v1"));
+  // The missing folder parks the loop with no timer; render's wake() retries, then v1 closes and
+  // v2 takes over; changing the file notifies v2.
+  assert.equal(retryCb, null);
+  cfg.wake(v1, makeCx("v1"));
   await flush();
+  assert.equal(attempt, 2);
   cfg.unmount(v1);
   await flush();
   notified.length = 0;
@@ -131,4 +134,50 @@ test("createModConfig mount notifies every mounted view on config change and rec
   assert.equal(latest, 2500);
   assert.deepEqual(notified, ["v2"]);
   cfg.unmount(v2);
+});
+
+test("createModConfig parks the watch while the mod is hidden and wake() resumes it with a reload", async () => {
+  let content = JSON.stringify({ pollMs: 5000 });
+  let shown = false, watches = 0, release = null, latest = null;
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const cx = { spawn(fn) { fn(cx); }, timer: { after() { throw new Error("no timer while parked"); } }, notify() {} };
+  const watchFolder = () => {
+    watches++;
+    const p = new Promise((resolve) => { release = resolve; });
+    p.cancel = () => release([]);
+    return p;
+  };
+  const cfg = createModConfig({
+    mod: "hj-files",
+    envVars: [],
+    defaults: { pollMs: 10000 },
+    home: () => "/Users/hj",
+    exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+    readTextFile: async () => content,
+    checking: () => false,
+  });
+  const view = {};
+  cfg.mount(view, cx, { watchFolder, shown: () => shown, onConfig: ({ config }) => { latest = config.pollMs; } });
+  await flush();
+  assert.equal(latest, 5000);
+  assert.equal(watches, 0);
+
+  content = JSON.stringify({ pollMs: 2500 });
+  shown = true;
+  cfg.wake(view, cx);
+  await flush();
+  assert.equal(latest, 2500);
+  assert.equal(watches, 1);
+
+  // Hidden again: the next change reloads once and parks instead of watching again.
+  shown = false;
+  content = JSON.stringify({ pollMs: 1000 });
+  release(["config.json"]);
+  await flush();
+  assert.equal(latest, 1000);
+  assert.equal(watches, 1);
+  cfg.wake(view, cx);
+  await flush();
+  assert.equal(watches, 1);
+  cfg.unmount(view);
 });

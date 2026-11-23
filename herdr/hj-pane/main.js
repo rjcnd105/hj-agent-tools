@@ -232,6 +232,7 @@ export default class Pane extends View {
   }
 
   render(cx) {
+    modConfig.wake(this, cx);
     const t = theme();
     const all = panes(), id = props()?.pane;
     const p = all.find((q) => q.pane === id);

@@ -14,6 +14,7 @@ import { agents, terminals, panes, focused, spaces, run, theme, shared, setShare
 import { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
+import { shownIn } from "./shown.js";
 
 const DEFAULT_CONFIG = {
   serverPollMs: 12000,
@@ -40,6 +41,7 @@ const modConfig = createModConfig({
 let agentsConfig = { ...DEFAULT_CONFIG };
 const mountConfig = (view, cx) => modConfig.mount(view, cx, {
   watchFolder,
+  shown: () => shownIn(layout(), "hj-agents"),
   onConfig({ config }) { agentsConfig = config; },
   onChange(_result, cx) { cx.notify(); },
 });
@@ -189,15 +191,7 @@ export default class Agents extends View {
     if (props()?.view === "servers") {
       if (checking()) return;
       mountConfig(this, cx);
-      const schedule = (cx) => {
-        this.serverTimer = cx.timer.after(agentsConfig.serverRefreshMs, (cx) => {
-          if (this.seenVersion !== snapshotVersion || this.seenFolded !== Boolean(shared("servers.folded"))) cx.notify();
-          // Normally Agents scans. A standalone Servers copy can bootstrap the snapshot.
-          if (snapshotVersion === 0 && pollAllowed() && Date.now() - lastPollAt >= agentsConfig.serverPollMs) cx.spawn(pollServers);
-          schedule(cx);
-        });
-      };
-      schedule(cx);
+      this.wake(cx);
       return;
     }
     this.folded = new Set();
@@ -210,18 +204,42 @@ export default class Agents extends View {
     mountConfig(this, cx);
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
-    cx.timer.every(30000, (cx) => cx.notify());
-    const schedulePoll = (cx) => {
-      this.serverTimer = cx.timer.after(agentsConfig.serverPollMs, (cx) => {
-        if (pollAllowed()) cx.spawn(pollServers);
-        schedulePoll(cx);
+    this.wake(cx);
+  }
+
+  // Timers run only while this copy's block is shown: one that fires hidden ends there, and the
+  // render that shows the block again starts it. A hidden sidebar costs no scan and no repaint.
+  wake(cx) {
+    if (checking() || props()?.sortMenu) return;
+    modConfig.wake(this, cx);
+    const servers = props()?.view === "servers";
+    const shown = () => shownIn(layout(), "hj-agents", (p) => (p?.view === "servers") === servers);
+    if (!this.serverTimer) {
+      this.serverTimer = cx.timer.after(servers ? agentsConfig.serverRefreshMs : agentsConfig.serverPollMs, (cx) => {
+        this.serverTimer = null;
+        if (!shown()) return;
+        if (!servers) {
+          if (pollAllowed()) cx.spawn(pollServers);
+        } else {
+          if (this.seenVersion !== snapshotVersion || this.seenFolded !== Boolean(shared("servers.folded"))) cx.notify();
+          // Normally Agents scans. A standalone Servers copy can bootstrap the snapshot.
+          if (snapshotVersion === 0 && pollAllowed() && Date.now() - lastPollAt >= agentsConfig.serverPollMs) cx.spawn(pollServers);
+        }
+        this.wake(cx);
       });
-    };
-    schedulePoll(cx);
+    }
+    // Durations ("3m") age between events: redraw them twice a minute.
+    if (!servers && !this.clock) {
+      this.clock = cx.timer.after(30000, (cx) => {
+        this.clock = null;
+        if (shown()) { cx.notify(); this.wake(cx); }
+      });
+    }
   }
 
   close() {
     this.serverTimer?.cancel?.();
+    this.clock?.cancel?.();
     modConfig.unmount(this);
   }
 
@@ -443,6 +461,7 @@ export default class Agents extends View {
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
+    this.wake(cx);
     if (props()?.view === "servers") return this.renderServers(t);
     const collapsed = narrow();
     const sort = sortOf();

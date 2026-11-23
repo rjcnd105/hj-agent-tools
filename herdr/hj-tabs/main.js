@@ -16,6 +16,7 @@ import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, terminals, props, run, hc, exec, home, checking, openOverlay, theme, window, shared, layout, settings, readTextFile, watchFolder } from "herdr";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, posNum } from "./mod-config.js";
+import { shownIn } from "./shown.js";
 
 const DEFAULT_CONFIG = {
   subRowId: "hj-subtabs",
@@ -40,6 +41,7 @@ const modConfig = createModConfig({
 let tabConfig = { ...DEFAULT_CONFIG };
 const mountConfig = (view, cx) => modConfig.mount(view, cx, {
   watchFolder,
+  shown: () => shownIn(layout(), "hj-tabs"),
   onConfig({ config }) { tabConfig = config; },
   onChange(_result, cx) { cx.notify(); },
 });
@@ -257,6 +259,7 @@ export default class Tabs extends View {
   }
 
   render(cx) {
+    modConfig.wake(this, cx);
     const t = theme();
     // One read of each live list per render.
     const sps = spaces(), all = panes(), terms = terminals();

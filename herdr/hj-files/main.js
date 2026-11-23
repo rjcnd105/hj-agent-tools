@@ -1,9 +1,10 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, home, checking, readTextFile, watchFolder, theme, settings, window, openOverlay } from "herdr";
+import { spaces, panes, focused, exec, home, checking, readTextFile, watchFolder, theme, settings, window, layout, openOverlay } from "herdr";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, posInt } from "./mod-config.js";
+import { shownIn } from "./shown.js";
 
 const DEFAULT_CONFIG = {
   pollMs: 10000,
@@ -28,6 +29,7 @@ const modConfig = createModConfig({
 let filesConfig = { ...DEFAULT_CONFIG };
 const mountConfig = (view, cx) => modConfig.mount(view, cx, {
   watchFolder,
+  shown: () => shownIn(layout(), "hj-files"),
   onConfig({ config }) { filesConfig = config; },
   onChange(_result, cx) { cx.notify(); },
 });
@@ -73,19 +75,23 @@ export default class Files extends View {
     if (checking()) return;
     mountConfig(this, cx);
     this.refresh(cx);
-    const schedule = (cx) => {
-      this.pollTimer = cx.timer.after(filesConfig.pollMs, (cx) => {
-        if (window()?.active !== false && !this.loading) this.refresh(cx);
-        schedule(cx);
-      });
-    };
-    schedule(cx);
+    this.poll(cx);
+  }
+
+  // A tick that finds the panel hidden ends the timer; the render that shows it starts it again.
+  poll(cx) {
+    this.pollTimer = cx.timer.after(filesConfig.pollMs, (cx) => {
+      this.pollTimer = null;
+      if (window()?.active !== false && !this.loading) this.refresh(cx);
+      if (!this.stale) this.poll(cx);
+    });
   }
 
   close() {
     this.pollTimer?.cancel?.();
     this.unwatch();
     modConfig.unmount(this);
+    this.code?.release(); this.code = null;
   }
 
   watch(root, cx) {
@@ -127,6 +133,9 @@ export default class Files extends View {
 
   refresh(cx) {
     if (checking()) return;
+    // A hidden panel lets go of its watch and timer: render refreshes and restarts them when it shows.
+    if (!shownIn(layout(), "hj-files")) { this.stale = true; this.unwatch(); return; }
+    this.stale = false;
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
@@ -241,7 +250,9 @@ export default class Files extends View {
   }
 
   render(cx) {
-    if (key() !== this.context?.key) this.refresh(cx);
+    modConfig.wake(this, cx);
+    if (key() !== this.context?.key || this.stale) this.refresh(cx);
+    if (!this.pollTimer && !checking()) this.poll(cx);
     const t = theme();
     return v_flex().id("files").size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)

@@ -111,54 +111,64 @@ export function createModConfig({
     if (!watcher) return;
     watcher.active = false;
     watcher.pending?.cancel?.();
-    watcher.retry?.cancel?.();
     watcher = null;
+  }
+
+  // One watch loop per mod, owned by one mounted view. It parks instead of holding a watch or a
+  // timer: when no block of the mod is shown (options.shown), when the folder can't be watched
+  // (it doesn't exist yet, or no watch was free), and when the host reclaims the watch. wake()
+  // restarts it from render, so a hidden mod costs nothing; a failed watch retries at most every
+  // retryMs, a hidden one at once (after reloading what changed meanwhile).
+  function run(state, cx) {
+    state.parked = 0;
+    cx.spawn(async () => {
+      const { options } = state;
+      let failed = false;
+      try {
+        let result = await reload(state);
+        while (state.active && (options.shown?.() ?? true)) {
+          state.pending = options.watchFolder(result.dir);
+          const paths = await state.pending;
+          if (!state.active) return;
+          if (!paths?.length) { failed = true; break; }
+          result = await reload(state);
+        }
+      } catch {
+        failed = true;
+      }
+      state.pending = null;
+      if (state.active) { state.parked = Date.now(); state.failed = failed; }
+    });
+  }
+
+  async function reload(state) {
+    const result = await loadSafe();
+    if (state.active && result.raw !== lastRaw) {
+      lastRaw = result.raw;
+      state.options.onConfig?.(result);
+      for (const { cx: viewCx, options: viewOpts } of views.values()) viewOpts.onChange?.(result, viewCx);
+    }
+    return result;
   }
 
   function startWatcher(owner, cx, options) {
     if (checking?.() || watcher) return;
-    const state = watcher = { owner, active: true, pending: null, retry: null };
-    const reload = async () => {
-      const result = await loadSafe();
-      if (!state.active) return result;
-      if (result.raw !== lastRaw) {
-        lastRaw = result.raw;
-        options.onConfig?.(result);
-        for (const { cx: viewCx, options: viewOpts } of views.values()) {
-          viewOpts.onChange?.(result, viewCx);
-        }
-      }
-      return result;
-    };
-    const runLoop = (cx) => {
-      cx.spawn(async (cx) => {
-        const result = await reload();
-        if (!state.active) return;
-        try {
-          while (state.active) {
-            state.pending = options.watchFolder(result.dir);
-            const paths = await state.pending;
-            if (!state.active || !paths?.length) break;
-            await reload();
-          }
-        } catch {
-          // Folder may not exist yet or host ran out of watches; retry below.
-        }
-        if (!state.active) return;
-        state.retry = cx.timer.after(options.retryMs ?? 30000, (cx) => {
-          if (!state.active) return;
-          state.retry = null;
-          runLoop(cx);
-        });
-      });
-    };
-    runLoop(cx);
+    run(watcher = { owner, options, active: true, pending: null, parked: 0, failed: false }, cx);
   }
 
   function mount(view, cx, options) {
     if (checking?.()) return;
     views.set(view, { cx, options });
     if (!watcher) startWatcher(view, cx, options);
+  }
+
+  /** Call at the top of render: restarts a parked watch loop, run by this view from now on. */
+  function wake(view, cx) {
+    const state = watcher, mounted = views.get(view);
+    if (!state?.parked || !mounted) return;
+    if (state.failed && Date.now() - state.parked < (mounted.options.retryMs ?? 30000)) return;
+    state.owner = view; state.options = mounted.options;
+    run(state, cx);
   }
 
   function unmount(view) {
@@ -172,5 +182,5 @@ export function createModConfig({
     }
   }
 
-  return { resolveDir, resolvePath, load, loadSafe, mount, unmount };
+  return { resolveDir, resolvePath, load, loadSafe, mount, wake, unmount };
 }
