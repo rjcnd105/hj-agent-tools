@@ -14,9 +14,10 @@ export function parseSession(text) {
   } catch { return null; }
 }
 
-/** A subagent's `agent-<id>.meta.json` → { path, label, running, agentId }, or undefined when the file
- *  can't be read yet (missing or half-written: read it again later). `path` is the worktree Claude made
- *  for it (`isolation: "worktree"`), else null: its prompt may still name one (promptWorktree).
+/** A subagent's `agent-<id>.meta.json` → { path, label, name, running, agentId }, or undefined when the
+ *  file can't be read yet (missing or half-written: read it again later). `path` is the worktree Claude
+ *  made for it (`isolation: "worktree"`), else null: its prompt may still name one (promptWorktree).
+ *  `label` is the whole name or description; the chip truncates it.
  *  A running subagent has no `finished` field yet. A team member never gets one and Claude records no
  *  state for it, so it is not shown as running. */
 export function parseMeta(file, text) {
@@ -24,10 +25,23 @@ export function parseMeta(file, text) {
   try { m = JSON.parse(text ?? ""); } catch { return undefined; }
   if (!m || typeof m !== "object") return undefined;
   const agentId = /^agent-(.+)\.meta\.json$/.exec(file)?.[1] ?? file;
+  const name = typeof m.name === "string" && m.name ? m.name : null;
   const description = typeof m.description === "string" ? m.description.trim() : "";
-  const label = (typeof m.name === "string" && m.name) || (description.length > 24 ? `${description.slice(0, 23)}…` : description) || agentId.slice(0, 8);
   const path = typeof m.worktreePath === "string" && m.worktreePath ? m.worktreePath : null;
-  return { path, label, running: m.taskKind !== "in_process_teammate" && m.finished !== true, agentId };
+  return { path, label: name || description || agentId.slice(0, 8), name, running: m.taskKind !== "in_process_teammate" && m.finished !== true, agentId };
+}
+
+/** Each target with `short`: its label without the leading words it shares with another shown target.
+ *  A parent names a batch of subagents alike ("Comment sicko PSR-1299", "Comment sicko PSR-1301"),
+ *  often next to others ("ie-1309-diagnosis"), and the batch's words would fill its chips.
+ *  At least one word stays; a label no other target starts like stays whole. */
+export function shortLabels(targets) {
+  const words = targets.map((t) => t.label.split(/\s+/).filter(Boolean));
+  const common = (a, b) => { let n = 0; while (n < a.length && n < b.length && a[n] === b[n]) n++; return n; };
+  return targets.map((t, i) => {
+    const shared = Math.min(words[i].length - 1, Math.max(0, ...words.map((w, j) => (j === i ? 0 : common(words[i], w)))));
+    return { ...t, short: words[i].slice(Math.max(0, shared)).join(" ") || t.label };
+  });
 }
 
 /** The one worktree a subagent's prompt names (a team member or subagent sent to work there), or null

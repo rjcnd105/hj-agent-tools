@@ -1,7 +1,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, agents, focused, exec, hc, home, checking, window, readTextFile, watchFolder, theme, settings, openOverlay } from "herdr";
-import { MAIN, projectSlug, parseSession, parseMeta, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } from "./model.js";
+import { MAIN, projectSlug, parseSession, parseMeta, shortLabels, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
 
@@ -181,7 +181,7 @@ export default class Changes extends View {
     let next = 0;
     const worker = async () => { while (next < targets.length) { const t = targets[next++]; counts[t.path] = await count(t.path); } };
     const [mainCount] = await Promise.all([count(session.cwd), ...Array.from({ length: Math.min(changesConfig.statusJobs, targets.length) }, worker)]);
-    return { session, visible: visibleTargets(targets, counts).slice(0, changesConfig.maxWorktrees), mainCount };
+    return { session, visible: shortLabels(visibleTargets(targets, counts).slice(0, changesConfig.maxWorktrees)), mainCount };
   }
 
   // Shows another target: nothing from the last one (files, diff, draft message) carries over.
@@ -368,7 +368,7 @@ export default class Changes extends View {
       // Wrapped, not scrolled sideways: a team of 6+ would otherwise hide most chips past the panel edge.
       .when(this.targets.length > 0, (el) => el.child(h_flex().id("changes-targets").flex_none().flex_wrap().px(8).py(6).gap(6).items_center().border_b(1).border_color(t.border)
         .child(this.chip(MAIN, "main", this.mainCount, false, t))
-        .children(this.targets.map((w) => this.chip(w.path, w.label, w.count, w.running, t)))))
+        .children(this.targets.map((w) => this.chip(w.path, w.short, w.count, w.running, t)))))
       // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
       .child(div().flex_1().min_h(44).max_h(this.files.length * 28 + 12).relative().border_b(1).border_color(t.border)
         .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(this.files.map((f) => {

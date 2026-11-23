@@ -4,7 +4,7 @@ import test from "node:test";
 
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
 const source = await readFile(new URL("../../herdr/hj-changes/model.js", import.meta.url));
-const { MAIN, projectSlug, parseSession, parseMeta, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } =
+const { MAIN, projectSlug, parseSession, parseMeta, shortLabels, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } =
   await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const meta = (fields) => JSON.stringify({ agentType: "general-purpose", spawnDepth: 1, ...fields });
@@ -28,9 +28,9 @@ test("meta: Claude's worktree, running until finished; a team member is never ru
   assert.equal(parseMeta("agent-a1.meta.json", null), undefined);
   assert.equal(parseMeta("agent-a1.meta.json", "null"), undefined);
   assert.deepEqual(parseMeta("agent-abc3c3f724b51dd8b.meta.json", meta({ worktreePath: "/repo.agent-abc", spawnedWithWorktree: true, name: "wt-probe" })),
-    { path: "/repo.agent-abc", label: "wt-probe", running: true, agentId: "abc3c3f724b51dd8b" });
+    { path: "/repo.agent-abc", label: "wt-probe", name: "wt-probe", running: true, agentId: "abc3c3f724b51dd8b" });
   assert.equal(parseMeta("agent-a1.meta.json", meta({ worktreePath: "/w", finished: true })).running, false);
-  assert.deepEqual(parseMeta("agent-a1.meta.json", meta({ description: "plain" })), { path: null, label: "plain", running: true, agentId: "a1" });
+  assert.deepEqual(parseMeta("agent-a1.meta.json", meta({ description: "plain" })), { path: null, label: "plain", name: null, running: true, agentId: "a1" });
   assert.equal(parseMeta("agent-aie-1303-x.meta.json", meta({ name: "ie-1303", taskKind: "in_process_teammate", worktreePath: null })).running, false);
 });
 
@@ -44,10 +44,23 @@ test("prompt names one worktree: longest path first, no partial names, none when
   assert.equal(promptWorktree("", paths), null);
 });
 
-test("meta label falls back to a short description, then the agent id", () => {
+test("meta label falls back to the whole description, then the agent id", () => {
   assert.equal(parseMeta("agent-a1.meta.json", meta({ worktreePath: "/w", description: "Fix login" })).label, "Fix login");
-  assert.equal(parseMeta("agent-a1.meta.json", meta({ worktreePath: "/w", description: "Refactor the whole payment flow" })).label, "Refactor the whole paym…");
+  assert.equal(parseMeta("agent-a1.meta.json", meta({ worktreePath: "/w", description: "Refactor the whole payment flow" })).label, "Refactor the whole payment flow");
   assert.equal(parseMeta("agent-0123456789ab.meta.json", meta({ worktreePath: "/w" })).label, "01234567");
+});
+
+test("short labels drop the leading words a target shares with another", () => {
+  const short = (...labels) => shortLabels(labels.map((label) => ({ label }))).map((t) => t.short);
+  assert.deepEqual(short("Comment sicko PSR-1299", "Comment sicko PSR-1301"), ["PSR-1299", "PSR-1301"]);
+  // A batch loses its shared words next to labels that don't share them.
+  assert.deepEqual(short("ie-1309-diagnosis", "Comment sicko PSR-1299", "Comment sicko base layers"), ["ie-1309-diagnosis", "PSR-1299", "base layers"]);
+  assert.deepEqual(short("Fix login", "Fix logout", "Add tests"), ["login", "logout", "Add tests"]);
+  // At least one word stays, even when one label is all shared words.
+  assert.deepEqual(short("Comment sicko", "Comment sicko PSR-1301"), ["sicko", "PSR-1301"]);
+  assert.deepEqual(short("same", "same"), ["same", "same"]);
+  assert.deepEqual(short("Comment sicko PSR-1299"), ["Comment sicko PSR-1299"]);
+  assert.deepEqual(shortLabels([]), []);
 });
 
 test("worktree list keeps branches and drops prunable entries", () => {
