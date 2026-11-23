@@ -229,6 +229,7 @@ export default class Team extends View {
       this.context = { key, cwd };
       this.watchDirectory("overlayWatch", null, cx);
       this.parentOverride = undefined;
+      this.soloMenu = null;
       this.presets = [];
       this.presetErrors = [];
       this.listError = null;
@@ -909,23 +910,74 @@ export default class Team extends View {
               (_e, cx) => this.launch(presetItem, null, cx, { roles: [role.id], runId: group.runId, withServers: false }),
               { disabled: !canSummon })))));
       }))
-      .when(Boolean(soloPreset), el => el.child(card(t).gap(6)
-        .child(h_flex().gap(6).items_center().min_w(0)
-          .child(caption(t, "단일 팀원 실행").flex_none())
-          .child(div().flex_1())
-          .child(action(t, "solo-parent", `${parentLabel}${parents.length > 1 ? " ↻" : ""}`, (_e, cx) => {
-            this.parentOverride = parents[(parents.indexOf(parent) + 1) % parents.length];
-            cx.notify();
-          }, { disabled: parents.length <= 1 })))
-        .child(action(t, "solo-preset", `${soloPreset.name}${entries.length > 1 ? " ↻" : ""}`, (_e, cx) => {
-          const i = entries.findIndex(entry => entry.id === soloPreset.id);
-          this.soloPresetId = entries[(i + 1) % entries.length].id;
-          cx.notify();
-        }, { disabled: entries.length <= 1 }))
-        .child(chips().children(soloPreset.preset.roles.map(role =>
-          action(t, `summon-role-${soloPreset.id}-${role.id}`, `+ ${role.id}`,
-            (_e, cx) => this.launch(soloPreset, parent, cx, { roles: [role.id], withServers: false }),
-            { disabled: !canSummon }))))));
+      .when(Boolean(soloPreset), el => {
+        const presetMenuOpen = this.soloMenu === "preset" && entries.length > 1;
+        const parentMenuOpen = this.soloMenu === "parent" && parents.length > 1;
+        return el.child(card(t).gap(6)
+          .child(h_flex().gap(6).items_center().min_w(0)
+            .child(caption(t, "단일 팀원 실행").flex_none())
+            .child(div().flex_1())
+            .child(action(t, "solo-parent", `${parentLabel}${parents.length > 1 ? (parentMenuOpen ? " ▴" : " ▾") : ""}`, (_e, cx) => {
+              this.soloMenu = parentMenuOpen ? null : "parent";
+              cx.notify();
+            }, { selected: parentMenuOpen, disabled: parents.length <= 1 })))
+          .when(parentMenuOpen, box => box.child(v_flex().id("solo-parent-menu").max_h(144).overflow_y_scrollbar().p(4).gap(2).rounded(6).bg(t.background).border_1().border_color(t.border)
+            .children(parents.map(addr => {
+              const info = candidates.find(terminal => terminal.address === addr);
+              const label = addr ? [info?.name || info?.program?.name, addr].filter(Boolean).join(" · ") : "None (no parent)";
+              const active = addr === parent;
+              return Button.new(`solo-parent-opt-${addr ?? "none"}`).flex().w_full().min_w(0).h(26).px(8).gap(6).items_center().rounded(5)
+                .bg(active ? t.selected : t.background).text_size(12).text_color(t.foreground).when(active, btn => btn.font_semibold())
+                .cursor_pointer().hover(s => s.bg(active ? t.selected : t.hover))
+                .on_click((_e, cx) => {
+                  this.parentOverride = addr;
+                  this.soloMenu = null;
+                  cx.notify();
+                })
+                .child(div().flex_1().min_w(0).truncate().child(label))
+                .when(active, btn => btn.child(div().flex_none().text_size(11).text_color(t.ansi2).child("✓")));
+            }))))
+          .child(Button.new("solo-preset").flex().w_full().min_w(0).h(28).px(8).gap(6).items_center().rounded(6)
+            .border_1().border_color(presetMenuOpen ? t.input : t.border).bg(presetMenuOpen ? t.selected : t.raised)
+            .text_size(12).text_color(t.foreground).disabled(entries.length <= 1)
+            .when(entries.length > 1, btn => btn.cursor_pointer().hover(s => s.bg(presetMenuOpen ? t.selected : t.hover))
+              .on_click((_e, cx) => {
+                this.soloMenu = presetMenuOpen ? null : "preset";
+                cx.notify();
+              }))
+            .child(div().flex_1().min_w(0).truncate().font_semibold().child(soloPreset.name))
+            .child(badge(t, `${soloPreset.preset.roles.length}`))
+            .when(entries.length > 1, btn => btn.child(div().flex_none().text_size(11).text_color(t.muted).child(presetMenuOpen ? "▴" : "▾"))))
+          .when(presetMenuOpen, box => box.child(v_flex().id("solo-preset-menu").max_h(180).overflow_y_scrollbar().p(4).gap(2).rounded(6).bg(t.background).border_1().border_color(t.border)
+            .children(entries.map(entry => {
+              const active = entry.id === soloPreset.id;
+              return Button.new(`solo-preset-opt-${entry.id}`).flex().w_full().min_w(0).h(28).px(8).gap(6).items_center().rounded(5)
+                .bg(active ? t.selected : t.background).text_size(12).text_color(t.foreground).when(active, btn => btn.font_semibold())
+                .cursor_pointer().hover(s => s.bg(active ? t.selected : t.hover))
+                .on_click((_e, cx) => {
+                  this.soloPresetId = entry.id;
+                  this.soloMenu = null;
+                  cx.notify();
+                })
+                .child(div().flex_1().min_w(0).truncate().child(entry.name))
+                .child(badge(t, `${entry.roleCount}`))
+                .when(active, btn => btn.child(div().flex_none().text_size(11).text_color(t.ansi2).child("✓")));
+            }))))
+          .child(v_flex().gap(2)
+            .children(soloPreset.preset.roles.map(role => {
+              const harness = describeRoleCommand(role.command, role.routeError);
+              return Button.new(`summon-role-${soloPreset.id}-${role.id}`).flex().w_full().min_w(0).h(28).px(8).gap(6).items_center().rounded(6)
+                .border_1().border_color(t.border).bg(t.raised).text_size(12).text_color(canSummon ? t.foreground : t.dim).disabled(!canSummon)
+                .when(canSummon, btn => btn.cursor_pointer().hover(s => s.bg(t.hover)).active(s => s.opacity(0.75))
+                  .on_click((_e, cx) => {
+                    this.soloMenu = null;
+                    this.launch(soloPreset, parent, cx, { roles: [role.id], withServers: false });
+                  }))
+                .child(div().flex_none().font_semibold().child(`+ ${role.id}`))
+                .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(role.title))
+                .when(!harness.error, btn => btn.child(harnessBadge(t, harness)));
+            }))));
+      });
   }
 
   render(cx) {
