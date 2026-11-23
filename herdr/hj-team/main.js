@@ -8,8 +8,8 @@ import {
   setShared, settings, shared, spaces, terminals, theme, watchFolder,
 } from "herdr";
 import {
-  availableParents, buildLaunchArgs, buildModelSyncPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  pickDefaultParent, resolveSpaceCwd, sortPresets,
+  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
+  normalizePresetFromEdit, pickDefaultParent, preparePresetForEdit, resolveSpaceCwd, sortPresets,
 } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
@@ -125,12 +125,19 @@ export default class Team extends View {
           this.origId = p.preset.id;
           this.origSha = p.globalSha;
         }
-        const doc = p.dialog === "routes" ? p.doc : p.preset;
+        let doc = p.dialog === "routes" ? p.doc : p.preset;
+        if (p.dialog === "edit") {
+          const prepared = p.isNew ? { doc: p.preset, autoCommands: {} } : preparePresetForEdit(p.preset, p.routes ?? {});
+          doc = prepared.doc;
+          this.autoCommands = prepared.autoCommands;
+        }
         this.editor = EditorState.new({ language: "json", value: JSON.stringify(doc, null, 2),
           font_family: settings().font_family, font_size: 12, syntax });
         if (p.dialog === "routes") {
           this.modelsSection = "routes";
           this.modelsEditor = EditorState.new({ language: "markdown", value: p.modelsText ?? "",
+            font_family: settings().font_family, font_size: 12, syntax });
+          this.machineEditor = EditorState.new({ language: "json", value: JSON.stringify(p.machineConfig ?? { schemaVersion: 1, executables: {}, path: [], env: {} }, null, 2),
             font_family: settings().font_family, font_size: 12, syntax });
           this.syncInput = InputState.new({ placeholder: "예: claude 6 추가 / pi - deepseek 4.1 조사해서 반영해줘" });
           this.syncInput.on("submit", (_event, cx) => this.syncModels(cx));
@@ -138,12 +145,19 @@ export default class Team extends View {
           this.syncNotice = null;
           this.syncing = false;
         }
+      } else if (p.dialog === "edit-agent") {
+        this.agentPromptInput = InputState.new({ placeholder: "예: reviewer 빼고 qa에 모바일 체크 추가해줘" });
+        this.agentPromptInput.on("submit", (_event, cx) => this.sendPresetEdit(cx));
+        this.syncTarget = p.syncTarget ?? null;
+        this.syncNotice = null;
+        this.syncing = false;
       }
       return;
     }
-    this.task = InputState.new({ placeholder: "Task for this squad..." });
     this.tab = "presets";
     this.presets = [];
+    this.presetsDir = null;
+    this.projectRoot = null;
     this.presetErrors = [];
     this.roles = new Set();
     this.lastUsed = {};
@@ -243,15 +257,19 @@ export default class Team extends View {
       do {
         context.reload = false;
         const cwdArgs = context.cwd ? ["--cwd", context.cwd] : [];
-        const [list, routes] = await Promise.allSettled([
+        const [list, routes, machine] = await Promise.allSettled([
           team(["preset", "list", ...cwdArgs, "--json"]).then(parseResult),
           team(["routes", "--json"]).then(parseResult),
+          team(["machine", "show", "--json"]).then(parseResult),
         ]);
         if (context !== this.context) return;
         this.routesDoc = routes.status === "fulfilled" ? routes.value : null;
         this.routesError = routes.status === "rejected" ? message(routes.reason) : null;
+        this.machineDoc = machine.status === "fulfilled" ? machine.value : null;
         if (list.status === "fulfilled") {
           const { presets, presetsDir, projectRoot, errors, routesReviewed } = list.value;
+          this.presetsDir = presetsDir ?? this.presetsDir;
+          this.projectRoot = projectRoot ?? null;
           if (presetsDir) this.watchDirectory("presetWatch", presetsDir, cx);
           if (context.cwd && projectRoot) this.watchDirectory("overlayWatch", `${projectRoot.replace(/\/$/, "")}/docs/agent-presets`, cx);
           this.presets = presets;
@@ -285,7 +303,10 @@ export default class Team extends View {
   }
 
   edit(preset, isNew, globalSha) {
-    openOverlay({ mod: "hj-team", kind: "dialog", modal: true, width: 640, height: 560, props: { dialog: "edit", preset, isNew, globalSha } });
+    openOverlay({
+      mod: "hj-team", kind: "dialog", modal: true, width: 640, height: 560,
+      props: { dialog: "edit", preset, isNew, globalSha, routes: this.routesDoc?.routes ?? {} },
+    });
   }
 
   editRoutes(space, allPanes, allTerminals) {
@@ -300,7 +321,51 @@ export default class Team extends View {
     const syncTarget = pickDefaultParent(space, allPanes, allTerminals, focused());
     openOverlay({
       mod: "hj-team", kind: "dialog", modal: true, width: 720, height: 600,
-      props: { dialog: "routes", doc, routesSha, routesPath, modelsPath, modelsText, modelsSha, syncCandidates, syncTarget },
+      props: {
+        dialog: "routes", doc, routesSha, routesPath, modelsPath, modelsText, modelsSha,
+        machinePath: this.machineDoc?.path ?? null,
+        machineSha: this.machineDoc?.sha ?? null,
+        machineConfig: this.machineDoc?.config ?? { schemaVersion: 1, executables: {}, path: [], env: {} },
+        machineExecutables: this.machineDoc?.executables ?? [],
+        presetsDir: this.presetsDir,
+        syncCandidates, syncTarget,
+      },
+    });
+  }
+
+  setupMachineWithAgent(cx) {
+    if (checking() || this.syncing || this.busy) return;
+    const p = props();
+    const target = this.syncTarget;
+    if (!target) {
+      this.error = "현재 스페이스에 요청을 보낼 활성 에이전트가 없습니다.";
+      this.syncNotice = null;
+      cx.notify();
+      return;
+    }
+    if (!terminals().some(t => t.address === target && t.state === "live")) {
+      this.error = `대상 에이전트(${target})가 더 이상 실행 중이 아닙니다.`;
+      this.syncNotice = null;
+      cx.notify();
+      return;
+    }
+    const label = p.syncCandidates?.find(c => c.address === target)?.label || target;
+    const prompt = buildMachineSetupPrompt({ machinePath: p?.machinePath, presetsDir: p?.presetsDir });
+    this.syncing = true;
+    this.error = null;
+    this.syncNotice = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = await hc(["send", target, prompt]);
+        if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "hc send failed");
+        this.syncNotice = `${label}에 이 머신 환경 세팅 요청을 보냈습니다.`;
+      } catch (error) {
+        this.error = message(error);
+      } finally {
+        this.syncing = false;
+        cx.notify();
+      }
     });
   }
 
@@ -351,16 +416,91 @@ export default class Team extends View {
     openOverlay({ mod: "hj-team", kind: "dialog", modal: true, width: 420, height: 248, props: { dialog, id } });
   }
 
+  editWithAgent(item, parent, space, allPanes, allTerminals) {
+    const candidates = availableParents(space, allPanes, allTerminals);
+    const syncCandidates = candidates.map(terminal => ({
+      address: terminal.address,
+      label: [terminal.name || terminal.program?.name, terminal.address].filter(Boolean).join(" · "),
+    }));
+    const syncTarget = parent && candidates.some(t => t.address === parent)
+      ? parent : pickDefaultParent(space, allPanes, allTerminals, focused());
+    const overlayDir = this.projectRoot ? `${this.projectRoot.replace(/\/+$/, "")}/docs/agent-presets/${item.id}` : null;
+    openOverlay({
+      mod: "hj-team", kind: "dialog", modal: true, width: 520, height: 256,
+      props: {
+        dialog: "edit-agent",
+        presetId: item.id,
+        presetName: item.preset.name,
+        presetsDir: this.presetsDir,
+        overlayDir,
+        syncCandidates,
+        syncTarget,
+      },
+    });
+  }
+
+  sendPresetEdit(cx) {
+    if (checking() || this.syncing || this.busy) return;
+    const p = props();
+    const prompt = buildPresetEditPrompt({
+      presetId: p?.presetId,
+      presetName: p?.presetName,
+      presetsDir: p?.presetsDir,
+      overlayDir: p?.overlayDir,
+      request: this.agentPromptInput?.value(),
+    });
+    if (!prompt) {
+      this.error = "프리셋 수정 요청 내용을 입력하세요.";
+      this.syncNotice = null;
+      cx.notify();
+      return;
+    }
+    const target = this.syncTarget;
+    if (!target) {
+      this.error = "현재 스페이스에 요청을 보낼 활성 에이전트가 없습니다.";
+      this.syncNotice = null;
+      cx.notify();
+      return;
+    }
+    if (!terminals().some(t => t.address === target && t.state === "live")) {
+      this.error = `대상 에이전트(${target})가 더 이상 실행 중이 아닙니다.`;
+      this.syncNotice = null;
+      cx.notify();
+      return;
+    }
+    const label = p.syncCandidates?.find(c => c.address === target)?.label || target;
+    this.syncing = true;
+    this.error = null;
+    this.syncNotice = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = await hc(["send", target, prompt]);
+        if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "hc send failed");
+        this.agentPromptInput.set_value("");
+        this.syncNotice = `${label}에 프리셋 수정 요청을 보냈습니다.`;
+      } catch (error) {
+        this.error = message(error);
+      } finally {
+        this.syncing = false;
+        cx.notify();
+      }
+    });
+  }
+
   applyDialog(cx) {
     if (checking() || this.busy) return;
     const p = props();
     const savingCollected = p?.dialog === "routes" && this.modelsSection === "collected";
-    if (!p?.dialog || (p.dialog === "routes" && !savingCollected && !p.routesSha)) return;
-    const args = p.dialog === "edit" ? ["preset", "save", "--json", this.editor.value(),
+    const savingMachine = p?.dialog === "routes" && this.modelsSection === "machine";
+    if (!p?.dialog || (p.dialog === "routes" && !savingCollected && !savingMachine && !p.routesSha)) return;
+    const editedPreset = p.dialog === "edit" ? normalizePresetFromEdit(this.editor.value(), p.routes ?? {}, this.autoCommands ?? {}) : null;
+    const args = p.dialog === "edit" ? ["preset", "save", "--json", editedPreset,
       ...(p.isNew ? [] : ["--update", "--expected-id", this.origId, ...(this.origSha ? ["--expected-sha", this.origSha] : [])])]
       : savingCollected ? ["models", "save", "--text", this.modelsEditor.value(), ...(p.modelsSha ? ["--expected-sha", p.modelsSha] : []), "--json"]
-        : p.dialog === "routes" ? ["routes", "save", "--json", this.editor.value(), "--expected-sha", p.routesSha]
-          : p.dialog === "confirm-delete" ? ["preset", "delete", p.id, "--json"] : ["stop", p.id];
+        : savingMachine ? ["machine", "save", "--json", this.machineEditor.value(), ...(p.machineSha ? ["--expected-sha", p.machineSha] : [])]
+          : p.dialog === "routes" ? ["routes", "save", "--json", this.editor.value(), "--expected-sha", p.routesSha]
+            : p.dialog === "confirm-delete" ? ["preset", "delete", p.id, "--json"] : ["stop", p.id];
     this.busy = true;
     this.error = null;
     cx.notify();
@@ -373,6 +513,51 @@ export default class Team extends View {
       } catch (error) {
         this.busy = false;
         this.error = message(error);
+        cx.notify();
+      }
+    });
+  }
+
+  seedPresets(cx) {
+    if (checking() || this.seeding) return;
+    this.seeding = true;
+    this.notice = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = parseResult(await team(["seed", "--json"]));
+        this.notice = { lines: [`${result.created.length}개 기본 예시 프리셋을 불러왔습니다.`] };
+      } catch (error) {
+        this.notice = { error: message(error) };
+      } finally {
+        this.seeding = false;
+        this.refresh(cx);
+        cx.notify();
+      }
+    });
+  }
+
+  onboardWithAgent(space, allPanes, allTerminals, cx) {
+    if (checking() || this.onboarding) return;
+    const target = pickDefaultParent(space, allPanes, allTerminals, focused());
+    if (!target) {
+      this.notice = { error: "현재 스페이스에 요청을 보낼 활성 에이전트가 없습니다." };
+      cx.notify();
+      return;
+    }
+    const prompt = buildOnboardingPrompt({ presetsDir: this.presetsDir, machinePath: this.machineDoc?.path });
+    this.onboarding = true;
+    this.notice = null;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = await hc(["send", target, prompt]);
+        if (result.code !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "hc send failed");
+        this.notice = { lines: [`${target}에 내 워크플로우 맞춤 초기 세팅 요청을 보냈습니다.`] };
+      } catch (error) {
+        this.notice = { error: message(error) };
+      } finally {
+        this.onboarding = false;
         cx.notify();
       }
     });
@@ -399,16 +584,19 @@ export default class Team extends View {
     });
   }
 
-  launch(item, parent, cx) {
+  launch(item, parent, cx, { roles: overrideRoles = null, runId = null, withServers = this.withServers } = {}) {
     const context = this.context;
-    if (checking() || this.launching || !this.roles.size || !context.cwd) return;
-    if (parent && !availableParents(spaces().find(s => s.active), panes(), terminals()).some(t => t.address === parent)) {
+    const selectedRoles = overrideRoles ?? [...this.roles];
+    if (checking() || this.launching || !selectedRoles.length || !context.cwd) return;
+    if (!runId && parent && !availableParents(spaces().find(s => s.active), panes(), terminals()).some(t => t.address === parent)) {
       this.notice = { error: "That parent is no longer available. Choose a parent and launch again." };
       cx.notify();
       return;
     }
-    const args = buildLaunchArgs({ presetId: item.id, cwd: context.cwd, parent, selectedRoles: [...this.roles],
-      task: this.task.value().trim(), withServers: this.withServers });
+    const args = buildLaunchArgs({
+      presetId: item.id, cwd: context.cwd, parent, selectedRoles,
+      task: "", withServers: Boolean(withServers && !runId), runId, notifyParent: Boolean(parent || runId),
+    });
     this.launching = true;
     this.notice = null;
     cx.notify();
@@ -441,22 +629,49 @@ export default class Team extends View {
   }
 
   dialog(t, p) {
+    if (p.dialog === "edit-agent") {
+      const candidates = p.syncCandidates ?? [];
+      const targetLabel = candidates.find(c => c.address === this.syncTarget)?.label || "활성 에이전트 없음";
+      return v_flex().size_full().min_h(0).p(16).gap(10).bg(t.popover).text_color(t.foreground).text_size(13)
+        .child(h_flex().gap(8).items_center().flex_none()
+          .child(div().text_size(15).font_semibold().truncate().child(`Edit preset · ${p.presetName || p.presetId}`))
+          .child(div().flex_1())
+          .child(action(t, "edit-agent-target", `${targetLabel}${candidates.length > 1 ? " ↻" : ""}`, (_e, cx) => {
+            if (candidates.length < 2) return;
+            const i = candidates.findIndex(c => c.address === this.syncTarget);
+            this.syncTarget = candidates[(i + 1) % candidates.length].address;
+            cx.notify();
+          }, { disabled: candidates.length <= 1 })))
+        .child(div().text_size(11.5).line_height("16px").text_color(t.dim)
+          .child("선택한 에이전트에게 이 프리셋 수정을 요청합니다. 프로젝트 전용 규칙은 오버레이(docs/agent-presets/)로 분리됩니다."))
+        .child(Input.new(this.agentPromptInput).h(32).w_full().px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_color(t.foreground))
+        .when(Boolean(this.syncNotice), el => el.child(div().text_size(11.5).text_color(t.ansi2).child(this.syncNotice)))
+        .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.ansi1).child(this.error)))
+        .child(div().flex_1())
+        .child(h_flex().gap(8).justify_end().flex_none()
+          .child(action(t, "cancel", "Close", () => closeOverlay(p.overlay), { disabled: Boolean(this.syncing) }))
+          .child(action(t, "send-edit-agent", this.syncing ? "Sending…" : "Send", (_e, cx) => this.sendPresetEdit(cx),
+            { primary: true, disabled: Boolean(this.syncing || !this.syncTarget) })));
+    }
     const edit = p.dialog === "edit", routes = p.dialog === "routes", stop = p.dialog === "confirm-stop";
     const editing = edit || routes;
     const collected = routes && this.modelsSection === "collected";
+    const machine = routes && this.modelsSection === "machine";
     const title = routes ? "Models" : edit ? p.isNew ? "New preset" : "Edit preset JSON" : stop ? `Stop run #${p.id}?` : `Delete ${p.id}?`;
     const detail = collected
       ? "수집된 모델 프로파일(_models.md). 아래 입력으로 포커스된 에이전트에게 새 모델 조사·동기화를 바로 요청할 수 있습니다."
-      : routes ? "프리셋 역할들이 공통으로 참조하는 에이전트별 모델 라우팅(_routes.json)."
-        : edit ? "This saves the global preset. Project overlays are separate."
-          : stop ? "This ends all live role and server terminals in this run, including any still working."
-            : "This removes the global preset. Project docs and running sessions are not removed.";
+      : machine ? `이 컴퓨터 전용 로컬 설정(${p.machinePath || "~/.config/hc-team/machine.json"}). 에이전트 실행 경로·환경을 머신별로 분리합니다.`
+        : routes ? "프리셋 역할들이 공통으로 참조하는 에이전트별 모델 라우팅(_routes.json)."
+          : edit ? "전역 프리셋 JSON입니다. 각 role의 command를 수정하면 해당 역할만의 모델로 저장되고, 그대로 두거나 지우면 route의 공통 모델을 따릅니다."
+            : stop ? "This ends all live role and server terminals in this run, including any still working."
+              : "This removes the global preset. Project docs and running sessions are not removed.";
     const label = editing ? "Save" : stop ? "Stop run" : "Delete preset";
     const candidates = p.syncCandidates ?? [];
     const targetLabel = candidates.find(c => c.address === this.syncTarget)?.label || "활성 에이전트 없음";
     const sectionTab = (id, text) => action(t, `models-sec-${id}`, text, (_e, cx) => {
       this.modelsSection = id;
       this.error = null;
+      this.syncNotice = null;
       cx.notify();
     }, { selected: this.modelsSection === id });
     return v_flex().size_full().min_h(0).p(16).gap(10).bg(t.popover).text_color(t.foreground).text_size(13)
@@ -464,11 +679,15 @@ export default class Team extends View {
         .child(div().text_size(16).font_semibold().child(title))
         .when(routes, el => el.child(h_flex().gap(4).p(2).rounded(8).bg(t.chrome)
           .child(sectionTab("routes", "공통 역할 모델"))
-          .child(sectionTab("collected", "수집된 모델"))))
+          .child(sectionTab("collected", "수집된 모델"))
+          .child(sectionTab("machine", "이 머신"))))
         .child(div().flex_1())
-        .when(routes && Boolean(p.doc.reviewed), el => el.child(div().text_size(10.5).text_color(t.dim).child(p.doc.reviewed))))
+        .when(routes && !machine && Boolean(p.doc.reviewed), el => el.child(div().text_size(10.5).text_color(t.dim).child(p.doc.reviewed))))
       .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(detail))
-      .when(routes && !collected && !p.routesSha, el => el.child(meta(t, "Run hc-team seed to create _routes.json, then reopen Models.")))
+      .when(edit && Object.keys(p.routes ?? {}).length > 0, el => el.child(chips().items_center().flex_none()
+        .child(div().text_size(10.5).text_color(t.dim).child("routes:"))
+        .children(Object.keys(p.routes).sort().map(name => badge(t, name)))))
+      .when(routes && !collected && !machine && !p.routesSha, el => el.child(meta(t, "Run hc-team seed to create _routes.json, then reopen Models.")))
       .when(collected, el => el.child(card(t).p(10).gap(6).flex_none()
         .child(h_flex().gap(8).items_center().min_w(0)
           .child(caption(t, "에이전트 모델 Sync"))
@@ -484,15 +703,31 @@ export default class Team extends View {
           .child(action(t, "sync-send", this.syncing ? "Sending…" : "Sync", (_e, cx) => this.syncModels(cx),
             { primary: true, disabled: Boolean(this.syncing || !this.syncTarget) })))
         .when(Boolean(this.syncNotice), box => box.child(div().text_size(11.5).text_color(t.ansi2).child(this.syncNotice)))))
-      .when(editing && !collected, el => el.child(Editor.new(this.editor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
+      .when(machine, el => el.child(card(t).p(10).gap(6).flex_none()
+        .child(h_flex().gap(8).items_center().min_w(0)
+          .child(caption(t, "에이전트 머신 세팅"))
+          .child(div().flex_1())
+          .child(action(t, "machine-target", `${targetLabel}${candidates.length > 1 ? " ↻" : ""}`, (_e, cx) => {
+            if (candidates.length < 2) return;
+            const i = candidates.findIndex(c => c.address === this.syncTarget);
+            this.syncTarget = candidates[(i + 1) % candidates.length].address;
+            cx.notify();
+          }, { disabled: candidates.length <= 1 }))
+          .child(action(t, "machine-setup", this.syncing ? "Sending…" : "에이전트로 세팅", (_e, cx) => this.setupMachineWithAgent(cx),
+            { primary: true, disabled: Boolean(this.syncing || !this.syncTarget) })))
+        .when(Boolean(p.machineExecutables?.length), box => box.child(chips().children(p.machineExecutables.map(row =>
+          badge(t, `${row.name}: ${row.ok ? row.source : "missing"}`, row.ok ? t.ansi2 : t.ansi1)))))
+        .when(Boolean(this.syncNotice), box => box.child(div().text_size(11.5).text_color(t.ansi2).child(this.syncNotice)))))
+      .when(editing && !collected && !machine, el => el.child(Editor.new(this.editor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
       .when(collected, el => el.child(Editor.new(this.modelsEditor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
+      .when(machine, el => el.child(Editor.new(this.machineEditor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
       .when(!editing, el => el.child(div().flex_1()))
       .when(Boolean(this.error), el => el.child(v_flex().id("dialog-errors").max_h(96).overflow_y_scrollbar().gap(4)
         .children(this.error.split("\n").map(line => div().text_size(12).text_color(t.ansi1).child(line)))))
       .child(h_flex().gap(8).justify_end().flex_none()
         .child(action(t, "cancel", "Cancel", () => closeOverlay(p.overlay), { disabled: Boolean(this.busy || this.syncing) }))
         .child(action(t, "apply", this.busy ? "Working…" : label, (_e, cx) => this.applyDialog(cx),
-          { primary: editing, danger: !editing, disabled: Boolean(this.busy || this.syncing || (routes && !collected && !p.routesSha)) })));
+          { primary: editing, danger: !editing, disabled: Boolean(this.busy || this.syncing || (routes && !collected && !machine && !p.routesSha)) })));
   }
 
   launchBar(t, item, space, allPanes, allTerminals) {
@@ -505,8 +740,6 @@ export default class Team extends View {
     const preset = item.preset;
     const canLaunch = this.roles.size > 0 && Boolean(this.context.cwd) && !this.launching;
     return card(t)
-      .child(caption(t, "Task"))
-      .child(Input.new(this.task).h(32).w_full().px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_color(t.foreground))
       .child(h_flex().gap(8).items_center().min_w(0)
         .child(caption(t, "Parent").flex_none())
         .child(action(t, "parent", `${parent ? [parentName, parent].filter(Boolean).join(" · ") : "None (no parent)"}${parents.length > 1 ? " ↻" : ""}`, (_e, cx) => {
@@ -519,6 +752,8 @@ export default class Team extends View {
         cx.notify();
       }, { selected: this.roles.has(role.id) }))))
       .child(h_flex().gap(8).items_center()
+        .child(action(t, "edit-with-agent", "Edit w/ Agent", () => this.editWithAgent(item, parent, space, allPanes, allTerminals),
+          { disabled: !candidates.length }))
         .when(Boolean(preset.servers?.length), el => el.child(action(t, "servers", this.withServers ? "✓ Servers" : "+ Servers", (_e, cx) => {
           this.withServers = !this.withServers;
           cx.notify();
@@ -539,7 +774,20 @@ export default class Team extends View {
       .child(v_flex().id("preset-warnings").max_h(72).overflow_y_scrollbar().gap(4)
         .children(this.presetErrors.map(({ id, path, message }) => meta(t, `${id || path || "Preset"}: ${message}`)))));
     if (!this.presets.length) {
-      return root.child(panelBody("teams-presets").child(meta(t, this.context.loading ? "Loading presets…" : this.listError ? "Could not load presets." : "No presets yet. Use + New to create a team.")));
+      if (this.context.loading || this.listError) {
+        return root.child(panelBody("teams-presets").child(meta(t, this.context.loading ? "Loading presets…" : "Could not load presets.")));
+      }
+      const hasAgent = Boolean(pickDefaultParent(space, allPanes, allTerminals, focused()));
+      return root.child(panelBody("teams-presets").child(card(t).gap(8)
+        .child(div().text_size(14).font_semibold().child("내 팀 프리셋 시작하기"))
+        .child(div().text_size(11.5).line_height("16px").text_color(t.dim)
+          .child(`${this.presetsDir || "~/.herdr/hj-team"} 에 아직 프리셋이 없습니다. 설치된 에이전트와 워크플로우에 맞게 세팅하거나 기본 예시를 불러올 수 있습니다.`))
+        .child(h_flex().gap(8).flex_wrap()
+          .child(action(t, "onboard-agent", this.onboarding ? "Sending…" : "에이전트로 초기 세팅",
+            (_e, cx) => this.onboardWithAgent(space, allPanes, allTerminals, cx),
+            { primary: true, disabled: Boolean(this.onboarding || !hasAgent) }))
+          .child(action(t, "seed-examples", this.seeding ? "Loading…" : "기본 예시 불러오기",
+            (_e, cx) => this.seedPresets(cx), { disabled: Boolean(this.seeding) })))));
     }
     const listHeight = Math.min(entries.length * 48 + 24, teamConfig.visiblePresetRows * 48 + 24);
     // overflow_y_scrollbar() wraps the list and breaks absolute inset sizing; pair overflow_y_scroll() with Scrollbar.vertical.
@@ -574,22 +822,38 @@ export default class Team extends View {
       const count = (harnesses.get(harness.name)?.count ?? 0) + 1;
       harnesses.set(harness.name, { harness, count });
     }
+    const selectedParent = (() => {
+      const candidates = availableParents(space, allPanes, allTerminals);
+      const parents = [...candidates.map(terminal => terminal.address), null];
+      return this.parentOverride === undefined ? pickDefaultParent(space, allPanes, allTerminals, focused())
+        : parents.includes(this.parentOverride) ? this.parentOverride : null;
+    })();
+    const initDisabled = !this.context.cwd || Boolean(this.scaffolding);
+    const soloDisabled = !this.context.cwd || Boolean(this.launching);
     return root.child(body
       .child(v_flex().gap(8)
         .child(v_flex().gap(6)
-          .child(div().text_size(15).font_semibold().child(preset.name))
+          .child(h_flex().gap(8).items_center().min_w(0)
+            .child(div().flex_1().min_w(0).truncate().text_size(15).font_semibold().child(preset.name))
+            .when(item.hasOverlay, el => el.child(div().flex_none().rounded(5).px(5).py(1).bg(t.selected).text_size(10).text_color(t.ansi2).child("docs/")))
+            .when(!item.hasOverlay, el => el.child(Button.new("init-docs").flex().flex_none().h(20).px(6).items_center().rounded(5)
+              .border_1().border_color(t.border).bg(t.background).text_size(10).text_color(t.dim).disabled(initDisabled)
+              .when(!initDisabled, btn => btn.cursor_pointer().hover(s => s.bg(t.hover).text_color(t.muted)).on_click((_e, cx) => this.initDocs(item, cx)))
+              .child(this.scaffolding ? "Creating…" : "Init docs/"))))
           .when(Boolean(preset.description), el => el.child(div().text_size(11).line_height("15px").text_color(t.dim).child(preset.description))))
-        .child(chips().children([...harnesses.values()].map(({ harness, count }) => harnessBadge(t, harness, count))))
-        .child(h_flex().items_center().gap(8).when(item.hasOverlay, el => el.child(badge(t, "docs/ active", t.ansi2)))
-          .when(!item.hasOverlay, el => el.child(action(t, "init-docs", this.scaffolding ? "Creating docs/…" : "Init docs/", (_e, cx) => this.initDocs(item, cx),
-            { disabled: !this.context.cwd || Boolean(this.scaffolding) })))))
+        .child(chips().children([...harnesses.values()].map(({ harness, count }) => harnessBadge(t, harness, count)))))
       .child(this.launchBar(t, item, space, allPanes, allTerminals))
       .child(v_flex().gap(4).child(caption(t, "Role preview"))
         .children(roles.map(({ role, harness }) => v_flex().gap(4).py(8).border_b(1).border_color(t.border)
-          .child(h_flex().gap(8).items_center().min_w(0)
+          .child(h_flex().gap(6).items_center().min_w(0)
             .child(div().font_semibold().child(role.id))
             .child(meta(t, role.title).flex_1().min_w(0).truncate())
-            .when(role.readOnly, el => el.child(badge(t, "Read only"))))
+            .when(role.readOnly, el => el.child(badge(t, "Read only")))
+            .child(Button.new(`run-solo-${role.id}`).flex().flex_none().h(20).px(6).items_center().rounded(5)
+              .border_1().border_color(t.border).bg(t.background).text_size(10).text_color(t.dim).disabled(soloDisabled)
+              .when(!soloDisabled, btn => btn.cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
+                .on_click((_e, cx) => this.launch(item, selectedParent, cx, { roles: [role.id], withServers: false })))
+              .child("Run")))
           .child(chips().items_center().min_w(0)
             .when(Boolean(role.route), el => el.child(badge(t, role.route)))
             .when(!harness.error, el => el.child(harnessBadge(t, harness)))
@@ -597,13 +861,14 @@ export default class Team extends View {
           .when(Boolean(harness.error), el => el.child(meta(t, harness.error).text_color(t.ansi1)))
           .when(Boolean(harness.executable), el => el.child(meta(t, harness.executable).truncate()))
           .when(Boolean(role.skills?.length), el => el.child(chips().children(role.skills.map(skill => badge(t, skill)))))
+          .when(Boolean(role.tools?.length), el => el.child(meta(t, `Tools: ${role.tools.join(" · ")}`).truncate()))
           .when(Boolean(role.talksTo?.length), el => el.child(meta(t, `Talks to: ${role.talksTo.join(", ")}`))))))
       .child(h_flex().justify_between().gap(8)
         .child(action(t, "edit-preset", "Edit JSON", () => this.edit(item.globalPreset, false, item.globalSha)))
         .child(action(t, "delete-preset", "Delete", () => this.confirm("confirm-delete", item.id), { danger: true }))));
   }
 
-  renderRuns(t, runs) {
+  renderRuns(t, runs, space, allPanes, allTerminals) {
     const row = (entry, server) => Button.new(`run-terminal-${entry.address}`).flex().w_full().min_w(0).rounded(6).px(4).py(4)
       .cursor_pointer().hover(s => s.bg(t.hover)).focus(s => s.bg(t.selected)).on_click(() => {
         if (checking()) return;
@@ -616,14 +881,51 @@ export default class Team extends View {
           .when(server, el => el.child(badge(t, "server")))
           .child(meta(t, entry.address).truncate()))
         .when(Boolean(entry.last), el => el.child(meta(t, `${entry.last.kind} → ${entry.last.to}: ${entry.last.summary}`).pl(22).truncate())));
+    const entries = sortPresets(this.presets, this.lastUsed);
+    const byId = new Map(entries.map(entry => [entry.id, entry]));
+    const soloPreset = entries.find(entry => entry.id === (this.soloPresetId ?? this.selectedId)) ?? entries[0] ?? null;
+    const candidates = availableParents(space, allPanes, allTerminals);
+    const parents = [...candidates.map(terminal => terminal.address), null];
+    const parent = this.parentOverride === undefined ? pickDefaultParent(space, allPanes, allTerminals, focused())
+      : parents.includes(this.parentOverride) ? this.parentOverride : null;
+    const chosen = candidates.find(terminal => terminal.address === parent);
+    const parentLabel = parent ? [chosen?.name || chosen?.program?.name, parent].filter(Boolean).join(" · ") : "None";
+    const canSummon = Boolean(this.context?.cwd) && !this.launching;
     return panelBody("teams-runs")
       .when(!runs.length, el => el.child(meta(t, "No live team runs.")))
-      .children(runs.map(group => card(t)
-        .child(h_flex().gap(8).items_center()
-          .child(div().flex_1().min_w(0).truncate().font_semibold().child(`${group.presetId ?? "Team"} · #${group.runId}`))
-          .child(action(t, `stop-${group.runId}`, "Stop", () => this.confirm("confirm-stop", group.runId), { danger: true })))
-        .children(group.roles.map(role => row(role, false)))
-        .children(group.servers.map(server => row(server, true)))));
+      .children(runs.map(group => {
+        const presetItem = group.presetId ? byId.get(group.presetId) : null;
+        const liveIds = new Set(group.roles.map(r => r.id));
+        const extraRoles = (presetItem?.preset?.roles ?? []).filter(role => !liveIds.has(role.id));
+        return card(t)
+          .child(h_flex().gap(8).items_center()
+            .child(div().flex_1().min_w(0).truncate().font_semibold().child(`${group.presetId ?? "Team"} · #${group.runId}`))
+            .child(action(t, `stop-${group.runId}`, "Stop", () => this.confirm("confirm-stop", group.runId), { danger: true })))
+          .children(group.roles.map(role => row(role, false)))
+          .children(group.servers.map(server => row(server, true)))
+          .when(Boolean(presetItem && extraRoles.length), el => el.child(h_flex().gap(4).flex_wrap().items_center().pt(4).border_t(1).border_color(t.border)
+            .child(div().text_size(10.5).text_color(t.dim).child("Add:"))
+            .children(extraRoles.map(role => action(t, `add-role-${group.runId}-${role.id}`, `+ ${role.id}`,
+              (_e, cx) => this.launch(presetItem, null, cx, { roles: [role.id], runId: group.runId, withServers: false }),
+              { disabled: !canSummon })))));
+      }))
+      .when(Boolean(soloPreset), el => el.child(card(t).gap(6)
+        .child(h_flex().gap(6).items_center().min_w(0)
+          .child(caption(t, "단일 팀원 실행").flex_none())
+          .child(div().flex_1())
+          .child(action(t, "solo-parent", `${parentLabel}${parents.length > 1 ? " ↻" : ""}`, (_e, cx) => {
+            this.parentOverride = parents[(parents.indexOf(parent) + 1) % parents.length];
+            cx.notify();
+          }, { disabled: parents.length <= 1 })))
+        .child(action(t, "solo-preset", `${soloPreset.name}${entries.length > 1 ? " ↻" : ""}`, (_e, cx) => {
+          const i = entries.findIndex(entry => entry.id === soloPreset.id);
+          this.soloPresetId = entries[(i + 1) % entries.length].id;
+          cx.notify();
+        }, { disabled: entries.length <= 1 }))
+        .child(chips().children(soloPreset.preset.roles.map(role =>
+          action(t, `summon-role-${soloPreset.id}-${role.id}`, `+ ${role.id}`,
+            (_e, cx) => this.launch(soloPreset, parent, cx, { roles: [role.id], withServers: false }),
+            { disabled: !canSummon }))))));
   }
 
   render(cx) {
@@ -649,6 +951,6 @@ export default class Team extends View {
         .when(Boolean(notice.title), card => card.child(caption(t, notice.title)))
         .children((notice.lines ?? []).map(line => meta(t, line)))
         .when(Boolean(notice.error), card => card.child(div().text_size(12).text_color(t.ansi1).child(notice.error)))))
-      .child(this.tab === "runs" ? this.renderRuns(t, runs) : this.renderPresets(t, space, allPanes, allTerminals));
+      .child(this.tab === "runs" ? this.renderRuns(t, runs, space, allPanes, allTerminals) : this.renderPresets(t, space, allPanes, allTerminals));
   }
 }

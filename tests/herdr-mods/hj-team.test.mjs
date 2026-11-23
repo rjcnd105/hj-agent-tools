@@ -5,8 +5,8 @@ import test from "node:test";
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
 const source = await readFile(new URL("../../herdr/hj-team/model.js", import.meta.url));
 const {
-  availableParents, buildLaunchArgs, buildModelSyncPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  pickDefaultParent, resolveSpaceCwd, sortPresets,
+  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
+  normalizePresetFromEdit, pickDefaultParent, preparePresetForEdit, resolveSpaceCwd, sortPresets,
 } = await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const terminal = (address, fields = {}) => ({ address, state: "live", ...fields });
@@ -116,6 +116,8 @@ test("builds exact launch argv with explicit parent choice and no shell escaping
     ["launch", "web-squad", "--json", "--cwd", "/work/web", "--no-parent", "--roles", "dev"]);
   assert.deepEqual(buildLaunchArgs({ presetId: "web-squad", cwd: "/work/web", parent: null }),
     ["launch", "web-squad", "--json", "--cwd", "/work/web", "--no-parent"]);
+  assert.deepEqual(buildLaunchArgs({ presetId: "web-squad", cwd: "/work/web", runId: "abc123", selectedRoles: ["qa"], notifyParent: true }),
+    ["launch", "web-squad", "--json", "--cwd", "/work/web", "--run", "abc123", "--roles", "qa", "--notify-parent"]);
 });
 
 test("describes mixed harness commands without treating unknown executables as a known agent", () => {
@@ -177,4 +179,73 @@ test("builds a model sync prompt for the focused agent and ignores empty input",
   assert.match(prompt, /pi - deepseek 4\.1 추가해줘/);
   assert.match(prompt, /\/Users\/hj\/\.herdr\/hj-team\/_models\.md/);
   assert.match(prompt, /\/Users\/hj\/\.herdr\/hj-team\/_routes\.json/);
+});
+
+test("builds a preset edit prompt with global and overlay paths and ignores empty input", () => {
+  assert.equal(buildPresetEditPrompt({ presetId: "bugfix-triage", request: "  " }), null);
+  const prompt = buildPresetEditPrompt({
+    presetId: "bugfix-triage",
+    presetName: "Bugfix Triage",
+    presetsDir: "/tmp/hj-team",
+    overlayDir: "/work/app/docs/agent-presets/bugfix-triage",
+    request: "verifier 역할을 선택 역할로 바꿔줘",
+  });
+  assert.match(prompt, /Bugfix Triage \(bugfix-triage\)/);
+  assert.match(prompt, /\/tmp\/hj-team\/bugfix-triage\.json/);
+  assert.match(prompt, /\/work\/app\/docs\/agent-presets\/bugfix-triage/);
+  assert.match(prompt, /hc-team preset save --stdin --update/);
+});
+
+test("builds a machine setup prompt pointing to machine.json", () => {
+  const prompt = buildMachineSetupPrompt({ machinePath: "/tmp/machine.json", presetsDir: "/tmp/presets" });
+  assert.match(prompt, /\/tmp\/machine\.json/);
+  assert.match(prompt, /hc-team machine show --json/);
+  assert.match(prompt, /hc-team machine save --stdin/);
+});
+
+test("builds an onboarding prompt pointing to user presets dir and machine.json", () => {
+  const prompt = buildOnboardingPrompt({ presetsDir: "/tmp/hj-team", machinePath: "/tmp/machine.json" });
+  assert.match(prompt, /\/tmp\/hj-team/);
+  assert.match(prompt, /\/tmp\/machine\.json/);
+  assert.match(prompt, /_tools\.md/);
+  assert.match(prompt, /hc-team routes save --stdin/);
+});
+
+test("expands route commands for Edit JSON and normalizes untouched vs customized roles on save", () => {
+  const routes = {
+    implement: { command: ["pi", "--provider", "openai", "--model", "gpt-6.2-sol", "--thinking", "high"] },
+    plan: { command: ["claude", "--model", "claude-fable-5-2", "--effort", "xhigh"] },
+  };
+  const globalPreset = {
+    schemaVersion: 1, id: "team", name: "Team",
+    roles: [
+      { id: "dev", title: "Dev", route: "implement", instructions: "Build." },
+      { id: "qa", title: "QA", route: "implement", instructions: "Test." },
+      { id: "custom", title: "Custom", command: ["agy", "--model", "gemini-4-neon-high"], instructions: "Check." },
+      { id: "broken", title: "Broken", route: "missing", instructions: "Fix." },
+    ],
+  };
+  const { doc, autoCommands } = preparePresetForEdit(globalPreset, routes);
+  assert.deepEqual(Object.keys(doc.roles[0]), ["id", "title", "route", "command", "instructions"]);
+  assert.deepEqual(doc.roles[0].command, routes.implement.command);
+  assert.deepEqual(doc.roles[2].command, ["agy", "--model", "gemini-4-neon-high"]);
+  assert.equal(Object.hasOwn(doc.roles[3], "command"), false);
+
+  // User customizes dev's model, switches qa's route without touching command, and leaves custom alone.
+  const edited = structuredClone(doc);
+  edited.roles[0].command = ["claude", "--model", "claude-fable-5-2", "--effort", "high"];
+  edited.roles[1].route = "plan";
+  const normalized = JSON.parse(normalizePresetFromEdit(JSON.stringify(edited), routes, autoCommands));
+  assert.deepEqual(normalized.roles[0], {
+    id: "dev", title: "Dev", command: ["claude", "--model", "claude-fable-5-2", "--effort", "high"], instructions: "Build.",
+  });
+  assert.deepEqual(normalized.roles[1], {
+    id: "qa", title: "QA", route: "plan", instructions: "Test.",
+  });
+  assert.deepEqual(normalized.roles[2], globalPreset.roles[2]);
+
+  // Untouched command keeps shared route link; malformed JSON passes through untouched.
+  const unchanged = JSON.parse(normalizePresetFromEdit(JSON.stringify(doc), routes, autoCommands));
+  assert.deepEqual(unchanged.roles[0], globalPreset.roles[0]);
+  assert.equal(normalizePresetFromEdit("{invalid", routes, autoCommands), "{invalid");
 });

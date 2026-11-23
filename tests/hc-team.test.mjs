@@ -36,7 +36,7 @@ function sandbox(t) {
   mkdirSync(bin);
   writeFileSync(config, '{}');
   writeFileSync(log, '');
-  const env = { ...process.env, HOME: home, HERDR_MOD_HJ_TEAM_DIR: '', HC_TEAM_PRESETS_DIR: '', HC_TERMINAL_ID: '', HC_FAKE_CONFIG: config, HC_FAKE_LOG: log, PATH: `${bin}:${process.env.PATH}` };
+  const env = { ...process.env, HOME: home, HERDR_MOD_HJ_TEAM_DIR: '', HC_TEAM_PRESETS_DIR: '', HC_TEAM_MACHINE_CONFIG: '', HC_TEAM_NO_LOGIN_SHELL: '1', HC_TERMINAL_ID: '', HC_FAKE_CONFIG: config, HC_FAKE_LOG: log, PATH: `${bin}:${process.env.PATH}` };
   const command = (args, options = {}) => spawnSync(process.execPath, [cli, ...args], {
     encoding: 'utf8', cwd, timeout: 25000, ...options, env: { ...env, ...options.env },
   });
@@ -99,9 +99,14 @@ if (verb === 'connect') {
     send({ address: 't' + id, name: flag('--name'), state: 'live' });
   }
 } else if (verb === 'wait') {
-  const first = !before.some(x => x.args[0] === 'wait' && x.args.at(-1) === rest.at(-1));
-  if (first && (cfg.messageDuringWait ?? []).includes(rest.at(-1))) send({ reason: 'message', ended: false });
+  const target = rest.at(-1);
+  const first = !before.some(x => x.args[0] === 'wait' && x.args.at(-1) === target);
+  if ((cfg.exitDuringWait ?? []).includes(target)) send({ reason: 'exited', ended: true, exit_code: 1 });
+  else if (first && (cfg.messageDuringWait ?? []).includes(target)) send({ reason: 'message', ended: false });
   else send({ status: 'idle', reason: 'status', ended: true, turn: 0 });
+} else if (verb === 'read') {
+  const target = rest.at(-1);
+  console.log((cfg.readText ?? {})[target] ?? '');
 } else if (verb === 'send') {
   const address = rest.at(-2);
   if (cfg.failSend === address) {
@@ -624,6 +629,98 @@ test('launch treats --help as task text, protects single executable argv and sep
     assert.equal(report.address, null);
     assert.match(report.reason, /spawn_failed/);
   }
+  mockHc(box, {
+    exitDuringWait: ['tweb'],
+    readText: { tweb: '\n\nmise ERROR failed to parse template\nField USER_HOST is not defined in env.\n' },
+  });
+  const exited = box.command(['launch', 'example', '--json']);
+  assert.equal(exited.status, 1);
+  assert.match(JSON.parse(exited.stdout).roles[0].reason, /Terminal not ready: exited \(mise ERROR failed to parse template \| Field USER_HOST is not defined in env\.\)/);
+});
+
+test('machine config resolves per-machine executables and injects env; launch --notify-parent briefs parent on standby runs', t => {
+  const box = sandbox(t);
+  const customDir = join(box.cwd, 'alt-agents');
+  box.executable('alt-agent', 'process.exit(0);', customDir);
+  box.save(preset({ roles: [role('dev', { command: ['alt-agent', '--fast'] })] }));
+  mockHc(box);
+  const saved = box.json(['machine', 'save', '--json', JSON.stringify({
+    schemaVersion: 1,
+    executables: { 'alt-agent': join(customDir, 'alt-agent') },
+    env: { USER_HOST: 'lab-box' },
+  })]);
+  assert.equal(saved.path, join(box.home, '.config/hc-team/machine.json'));
+  const shown = box.json(['machine', 'show']);
+  assert.equal(shown.exists, true);
+  assert.equal(shown.executables.find(row => row.name === 'alt-agent').source, 'machine');
+  const launched = box.json(['launch', 'example', '--parent', 'tparent', '--notify-parent']);
+  assert.equal(launched.roles[0].sent, true);
+  assert.equal(launched.parentNotified, true);
+  assert.match(readFileSync(launched.roles[0].briefPath, 'utf8'), /Stand by for instructions from parent \(tparent\)/);
+  const log = readLog(box.log);
+  const runArgs = log.find(row => row.args[0] === 'run').args;
+  assert.deepEqual(runArgs.slice(runArgs.indexOf('--') + 1), ['/usr/bin/env', 'USER_HOST=lab-box', join(customDir, 'alt-agent'), '--fast']);
+  const parentSend = log.find(row => row.args[0] === 'send' && row.args.at(-2) === 'tparent');
+  assert.ok(parentSend);
+  assert.match(parentSend.args.at(-1), /Active roles:\n- dev \(tdev\)/);
+});
+
+test('login shell probe parses sentinel PATH past stdout noise and spawnTerminal wraps command in user shell exec', t => {
+  const box = sandbox(t);
+  const shellDir = join(box.cwd, 'fake-shell');
+  const agentDir = join(box.cwd, 'shell-only-agents');
+  box.executable('shell-agent', 'process.exit(0);', agentDir);
+  box.executable('zsh', `
+const script = process.argv[3] || '';
+if (script.includes('__HC_TEAM_PATH__')) {
+  process.stdout.write('welcome banner noise\\n__HC_TEAM_PATH__' + ${JSON.stringify(agentDir)} + '__HC_TEAM_PATH__trailing noise\\n');
+}
+`, shellDir);
+  box.save(preset({ roles: [role('dev', { command: ['shell-agent', '--ok'] })] }));
+  mockHc(box);
+  const env = {
+    HC_TEAM_NO_LOGIN_SHELL: '',
+    SHELL: join(shellDir, 'zsh'),
+    PATH: `${dirname(box.log)}/bin:${dirname(process.execPath)}:/usr/bin:/bin`,
+  };
+  const dry = box.json(['launch', 'example', '--dry-run'], { env });
+  assert.deepEqual(dry.roles[0].command, [join(agentDir, 'shell-agent'), '--ok']);
+  const launched = box.json(['launch', 'example'], { env });
+  assert.equal(launched.roles[0].sent, true);
+  const runArgs = readLog(box.log).find(row => row.args[0] === 'run').args;
+  assert.deepEqual(runArgs.slice(runArgs.indexOf('--') + 1), [join(shellDir, 'zsh'), '-ilc', 'exec "$@"', 'hc-team', join(agentDir, 'shell-agent'), '--ok']);
+});
+
+test('brief injects role tools, resolved SKILL.md paths, global _tools.md, and overlay helper scripts', t => {
+  const box = sandbox(t);
+  const skillDir = join(box.home, '.agents/skills/my-tool');
+  mkdirSync(skillDir, { recursive: true });
+  const skillFile = join(skillDir, 'SKILL.md');
+  writeFileSync(skillFile, '# My Tool\n');
+  const globalTools = join(box.presets, '_tools.md');
+  mkdirSync(box.presets, { recursive: true });
+  writeFileSync(globalTools, '# Global Tools\n');
+  const overlayTools = join(box.cwd, 'docs/agent-presets/example/tools');
+  mkdirSync(overlayTools, { recursive: true });
+  writeFileSync(join(overlayTools, 'README.md'), '# helpers\n');
+  const helperScript = join(overlayTools, 'check.sh');
+  writeFileSync(helperScript, '#!/bin/sh\n');
+  box.save(preset({
+    roles: [role('qa', {
+      skills: ['my-tool', 'missing-skill'],
+      tools: ['ego-browser nodejs (never Playwright)', 'hc-team servers --run <runId>'],
+    })],
+  }));
+  mockHc(box);
+  const launched = box.json(['launch', 'example', '--task', 'Check UI']);
+  assert.equal(launched.roles[0].sent, true);
+  const brief = readFileSync(launched.roles[0].briefPath, 'utf8');
+  assert.match(brief, /## Preferred tools & scripts \(use first\)/);
+  assert.match(brief, /ego-browser nodejs \(never Playwright\)/);
+  assert.ok(brief.includes(`my-tool -> ${skillFile}`));
+  assert.ok(brief.includes('- missing-skill'));
+  assert.ok(brief.includes(`${globalTools} (global verified CLI/script playbook)`));
+  assert.ok(brief.includes(`${helperScript} (project helper script)`));
 });
 
 test('status, send, and stop exclude remote run collisions; plain-shell parent is event-only', t => {

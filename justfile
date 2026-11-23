@@ -50,24 +50,29 @@ build:
 e2e-ego-recorder: build
     node external/chrome-extensions/ego-recorder/e2e/run.mjs
 
-# Install the hc-team CLI wrapper and seed missing presets/routes into HERDR_MOD_HJ_TEAM_DIR (~/.herdr/hj-team)
+# Install the hc-team CLI wrapper (~/.herdr/hj-team/ presets are owned per user; run `hc-team seed` or onboard via UI if desired)
 hc-team:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{bin_dir}}"
     chmod +x "$PWD/skills/hc-team/scripts/hc-team.mjs"
-    NODE_BIN="$(command -v node)"
+    NODE_BIN="$(command -v node || true)"
+    if [ -z "$NODE_BIN" ]; then echo "node (>= 22) is required to install hc-team" >&2; exit 1; fi
     cat > "{{bin_dir}}/hc-team.tmp" <<EOF
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ -x "$NODE_BIN" ]; then
+      exec "$NODE_BIN" "$PWD/skills/hc-team/scripts/hc-team.mjs" "\$@"
+    fi
     NODE_BIN="\$(command -v node 2>/dev/null || true)"
-    if [ -z "\$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then NODE_BIN="$NODE_BIN"; fi
-    if [ -z "\$NODE_BIN" ] && [ -x "\$HOME/.local/share/mise/shims/node" ]; then NODE_BIN="\$HOME/.local/share/mise/shims/node"; fi
-    exec "\${NODE_BIN:-node}" "$PWD/skills/hc-team/scripts/hc-team.mjs" "\$@"
+    if [ -z "\$NODE_BIN" ]; then
+      echo "hc-team: node not found; reinstall with \`just hc-team\`" >&2
+      exit 127
+    fi
+    exec "\$NODE_BIN" "$PWD/skills/hc-team/scripts/hc-team.mjs" "\$@"
     EOF
     chmod 755 "{{bin_dir}}/hc-team.tmp"
     mv -f "{{bin_dir}}/hc-team.tmp" "{{bin_dir}}/hc-team"
-    "{{bin_dir}}/hc-team" seed --from "$PWD/presets"
 
 # Copy the Herdr mods (and the shared helpers in herdr/lib) into the app's home, which loads them live
 herdr-mods:

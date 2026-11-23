@@ -15,11 +15,22 @@ Prefer `route` for new roles. `<presetsDir>/_routes.json` maps capability needs 
 
 For the two-line preset switcher, write a short Korean `description` that opens directly with when to choose the preset (no `언제:` prefix), followed by `기본: ...`, and optionally `선택: ...` and `서버: ...`.
 
-1. Turn the request into a role list. For each role, identify the outcome, model route or literal command, skills and tools, writable paths or read-only scope, same-preset `talksTo` targets, and observable checkpoints. Put project-only tools and details in the overlay. For each dev server, identify its command and relative working directory.
-2. Read [Schema v1](references/schema.md) for fields, limits, and full examples. Write one JSON object. Keep 2–3 roles enabled by default; set `"default": false` on extra specialists. Use argv arrays such as `["bun", "dev"]`, not shell strings. Store executable names, not absolute binary paths: launch resolves them and adds `--no-daemon` to `codex` if needed. `owns`, `readOnly`, `skills`, and `checkpoints` guide the brief; they do not enforce a sandbox.
+1. Turn the request into a role list. For each role, identify the outcome, model route or literal command, skills, concrete `tools` (preferred CLIs/scripts so the role avoids trial-and-error), writable paths or read-only scope, same-preset `talksTo` targets, and observable checkpoints. Keep global presets strictly project-, branch-, brand-, and session-memory-agnostic: never hardcode repository names, ticket prefixes, branch names, brand tone, or repo-specific scripts/paths in global presets. Put all project-specific conventions, commands, and domain context in the project's `docs/agent-presets/<id>/` overlay instead. For each dev server, identify its command and relative working directory (or leave `servers` to the project overlay).
+2. Read [Schema v1](references/schema.md) for fields, limits, and full examples. Write one JSON object. Keep 2–3 roles enabled by default; set `"default": false` on extra specialists. Use argv arrays such as `["bun", "dev"]`, not shell strings. Store executable names, not absolute binary paths: launch resolves them and adds `--no-daemon` to `codex` if needed. `owns`, `readOnly`, `skills`, `tools`, and `checkpoints` guide the brief (`hc-team launch` also resolves `skills` to installed `SKILL.md` paths, links `<presetsDir>/_tools.md` if present, and lists scripts in `docs/agent-presets/<id>/tools/`); they do not enforce a sandbox.
 3. For a new ID, pipe the JSON to `hc-team preset save --stdin` (or pass it as the value of `--json`). If the ID exists, pick a new ID or use the edit flow only when the user asked to update it.
 4. For an edit, read the global preset with `hc-team preset get <id> --json` (omit `--merged`). Patch the requested fields, keeping the ID and unrelated fields, then pipe the full JSON to `hc-team preset save --stdin --update`. The explicit `--update` is required for overwrites. For a project-only change, edit the overlay instead.
 5. Fix validation errors at the reported JSON Pointer. Verify the saved ID and default roles with `hc-team preset list --cwd <repo> --json`: check the resolved `presetsDir`, compare `globalPreset` with the save, and check `preset` for the effective project values.
+
+## Configure this machine
+
+Global presets and `_routes.json` live in `~/.herdr/hj-team/` (synced across machines) and must stay machine-independent (executable basenames only, never machine-specific paths). Per-machine binary paths and env vars live in `~/.config/hc-team/machine.json` (overridable via `HC_TEAM_MACHINE_CONFIG`), which is NOT synced across computers.
+
+When setting up a new computer or fixing executable/env launch errors ("이 컴퓨터 hc-team 세팅해줘"):
+
+1. Run `hc-team machine show --json` to inspect every executable referenced by `_routes.json` and global presets (`claude`, `codex`, `pi`, `agy`, `hc`, etc.).
+2. Verify where each agent CLI is actually installed on this computer. Prefer direct binary paths over shims (`mise/shims`, `asdf/shims`) when available so non-login GUI launches do not break on shell-only env vars.
+3. If non-login GUI sub-sessions on this computer require specific environment variables, put them in `env` inside `machine.json`.
+4. Save via `hc-team machine save --stdin` (or `hc-team machine detect --write`), then verify under minimal `PATH`: `PATH=/usr/bin:/bin hc-team launch <preset> --dry-run --json`.
 
 ## Refresh model routing
 

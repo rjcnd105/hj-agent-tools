@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, constants, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { appendFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,10 @@ export function getPresetsDir() {
     .map(value => (typeof value === 'string' ? value.trim() : ''))
     .find(Boolean);
   return resolve(configured ? expandHome(configured) : join(homedir(), '.herdr', 'hj-team'));
+}
+export function getMachineConfigPath() {
+  const configured = typeof process.env.HC_TEAM_MACHINE_CONFIG === 'string' ? process.env.HC_TEAM_MACHINE_CONFIG.trim() : '';
+  return resolve(configured ? expandHome(configured) : join(homedir(), '.config', 'hc-team', 'machine.json'));
 }
 const runsDir = join(homedir(), '.local/state/hc-team/runs');
 const builtinsDir = fileURLToPath(new URL('../../../presets/', import.meta.url));
@@ -68,7 +72,7 @@ export const PRESET_JSON_SCHEMA = {
           title: { ...string, maxLength: 60 }, command, route: { type: 'string', pattern: presetId },
           default: { type: 'boolean', default: true },
           readOnly: { type: 'boolean', default: false },
-          skills: strings, owns: strings, checkpoints: strings,
+          skills: strings, tools: strings, owns: strings, checkpoints: strings,
           talksTo: { ...strings, items: { type: 'string', pattern: roleId }, $comment: 'Each ID must refer to another role in the same preset.' },
           instructions: string,
         },
@@ -89,6 +93,17 @@ const ROUTES_SCHEMA = {
         properties: { command, why: { type: 'string' } },
       },
     },
+  },
+};
+
+const MACHINE_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['schemaVersion'],
+  properties: {
+    schemaVersion: { type: 'integer', const: 1 },
+    executables: { type: 'object', default: {}, additionalProperties: string },
+    path: strings,
+    env: { type: 'object', default: {}, additionalProperties: string },
+    shell: { type: 'string', minLength: 1 },
   },
 };
 
@@ -320,6 +335,7 @@ const runPath = id => join(runsDir, id);
 
 const routesPath = () => join(getPresetsDir(), '_routes.json');
 const modelsPath = () => join(getPresetsDir(), '_models.md');
+const toolsPath = () => join(getPresetsDir(), '_tools.md');
 
 function checkedRoutes(raw) {
   const issues = [];
@@ -447,7 +463,8 @@ async function initProject(id, root) {
     ['shared.md', `# ${preset.name} — shared project context\n\nLink to project conventions, required checks, and shared context.\n`],
     ...preset.roles.map(role => [`roles/${role.id}.md`, `# ${role.title}\n\n${
       role.id.includes('qa') || role.skills.some(skill => qaSkills.has(skill))
-        ? qaTemplate() : 'Add ownership boundaries, local commands, checkpoints, and relevant project links.'}\n`]),
+        ? qaTemplate()
+        : '## Verified Commands & Process\nRecord exact working CLI commands, scripts, flags, and known gotchas so future runs execute without trial-and-error.\n\n## Ownership & Checkpoints\nAdd ownership boundaries, checkpoints, and relevant project links.'}\n`]),
     ['tools/README.md', '# Project-local helpers\n\nDocument the purpose and invocation of any executable helper scripts placed here.\n'],
   ];
   const created = [], skipped = [];
@@ -465,25 +482,141 @@ async function initProject(id, root) {
   return { overlayDir, created, skipped };
 }
 
-function resolveExecutable(executable, cwd) {
+function checkedMachine(raw, message = 'Invalid machine config') {
+  const issues = [];
+  validateShape(MACHINE_SCHEMA, raw, '', issues);
+  if (issues.length) throw new CliError(message, issues);
+  return {
+    schemaVersion: 1,
+    executables: { ...(raw.executables ?? {}) },
+    path: [...(raw.path ?? [])],
+    env: { ...(raw.env ?? {}) },
+    ...(raw.shell ? { shell: raw.shell } : {}),
+  };
+}
+
+let machineConfigCache = null;
+
+function loadMachineConfigSync() {
+  const path = getMachineConfigPath();
+  if (machineConfigCache?.path === path) return machineConfigCache.config;
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch (error) {
+    if (error.code === 'ENOENT') {
+      machineConfigCache = { path, config: { schemaVersion: 1, executables: {}, path: [], env: {} } };
+      return machineConfigCache.config;
+    }
+    throw error;
+  }
+  const config = checkedMachine(parseJson(text, path), `Invalid machine config ${path}`);
+  machineConfigCache = { path, config };
+  return config;
+}
+
+const SUPPORTED_SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+const PATH_SENTINEL = '__HC_TEAM_PATH__';
+const loginShellPathCache = new Map();
+
+function resolveUserShell(machine = loadMachineConfigSync()) {
+  let passwdShell = '';
+  try { passwdShell = userInfo().shell ?? ''; } catch { /* ignore */ }
+  const configured = machine?.shell ? expandHome(machine.shell.trim()) : '';
+  for (const candidate of [configured, process.env.SHELL, passwdShell, '/bin/sh']) {
+    if (!candidate || !isAbsolute(candidate) || !isExecutableFile(candidate)) continue;
+    if (SUPPORTED_SHELLS.has(basename(candidate))) return candidate;
+  }
+  return '/bin/sh';
+}
+
+function probeLoginShellPath(cwd = process.cwd()) {
+  if (process.env.HC_TEAM_NO_LOGIN_SHELL === '1' || process.platform === 'win32') return [];
+  const key = cwd || '';
+  if (loginShellPathCache.has(key)) return loginShellPathCache.get(key);
+  const shell = resolveUserShell();
+  const args = basename(shell) === 'fish'
+    ? ['-l', '-i', '-c', `printf '${PATH_SENTINEL}%s${PATH_SENTINEL}' (string join : $PATH)`]
+    : ['-ilc', `printf '${PATH_SENTINEL}%s${PATH_SENTINEL}' "$PATH"`];
+  let dirs = [];
+  try {
+    const out = execFileSync(shell, args, {
+      cwd: key || undefined, encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parts = out.split(PATH_SENTINEL);
+    const extracted = parts.length >= 3 ? parts[1] : out;
+    dirs = extracted.split(delimiter).map(part => part.trim()).filter(Boolean);
+  } catch {
+    dirs = [];
+  }
+  loginShellPathCache.set(key, dirs);
+  return dirs;
+}
+
+function isExecutableFile(candidate) {
+  try {
+    accessSync(candidate, constants.X_OK);
+    return statSync(candidate).isFile();
+  } catch { return false; }
+}
+
+function fallbackBinDirs() {
   const home = homedir();
-  const path = [
-    ...(process.env.PATH ?? '').split(delimiter).filter(Boolean),
-    join(home, '.local/bin'), join(home, '.local/share/mise/shims'), join(home, '.cache/.bun/bin'),
+  return [
+    join(home, '.local/bin'), join(home, '.cache/.bun/bin'), join(home, '.bun/bin'),
+    join(home, '.volta/bin'), join(home, '.cargo/bin'), join(home, '.npm-global/bin'),
+    join(home, '.nix-profile/bin'), join(home, '.local/share/mise/shims'),
     '/opt/homebrew/bin', '/usr/local/bin',
   ];
-  const candidates = executable.includes('/') ? [resolve(cwd, executable)] : path.map(dir => resolve(dir, executable));
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.X_OK);
-      if (statSync(candidate).isFile()) return candidate;
-    } catch { /* Try the next PATH entry. */ }
+}
+
+function resolveExecutableWithSource(executable, cwd, { ignoreMachine = false, skipShellProbe = false } = {}) {
+  if (executable.includes('/') || (sep === '\\' && executable.includes('\\'))) {
+    const candidate = resolve(cwd, executable);
+    if (isExecutableFile(candidate)) return { resolved: candidate, source: 'explicit' };
+    throw new CliError(`Executable not found: ${executable}`);
   }
+  const machine = ignoreMachine ? { executables: {}, path: [] } : loadMachineConfigSync();
+  if (!ignoreMachine && Object.hasOwn(machine.executables, executable)) {
+    const configured = resolve(cwd, expandHome(machine.executables[executable].trim()));
+    if (isExecutableFile(configured)) return { resolved: configured, source: 'machine' };
+    throw new CliError(`Configured executable for ${executable} not found: ${configured} (run \`hc-team machine detect --write\` or update ${getMachineConfigPath()})`);
+  }
+  const seen = new Set();
+  const findIn = (dirs, source, skipShims = false) => {
+    for (const rawDir of dirs) {
+      const dir = typeof rawDir === 'string' ? expandHome(rawDir.trim()) : '';
+      if (!dir || seen.has(dir)) continue;
+      if (skipShims && /[\\/]shims$/.test(dir)) continue;
+      seen.add(dir);
+      const candidate = resolve(dir, executable);
+      if (isExecutableFile(candidate)) return { resolved: candidate, source };
+    }
+    return null;
+  };
+  const activeDirs = (process.env.PATH ?? '').split(delimiter);
+  const machineDirs = machine.path ?? [];
+  const fallbacks = fallbackBinDirs();
+  // Avoid spawning an interactive shell for `hc` itself when it already lives in ~/.local/bin (e.g. periodic servers polling).
+  if (skipShellProbe) {
+    const fast = findIn(activeDirs, 'PATH', true) ?? findIn(machineDirs, 'machine-path', true) ?? findIn(fallbacks, 'fallback', true);
+    if (fast) return fast;
+  }
+  const loginDirs = probeLoginShellPath(cwd);
+  // Prefer direct binaries over shims when probing, then allow shims as fallback.
+  const found = findIn(activeDirs, 'PATH', true)
+    ?? findIn(machineDirs, 'machine-path', true)
+    ?? findIn(loginDirs, 'login-shell', true)
+    ?? findIn(fallbacks, 'fallback', true)
+    ?? (() => { seen.clear(); return findIn(activeDirs, 'PATH') ?? findIn(machineDirs, 'machine-path') ?? findIn(loginDirs, 'login-shell') ?? findIn(fallbacks, 'fallback'); })();
+  if (found) return found;
   throw new CliError(`Executable not found: ${executable}`);
 }
 
+function resolveExecutable(executable, cwd, options) {
+  return resolveExecutableWithSource(executable, cwd, options).resolved;
+}
+
 function hc(args, { timeout = 65000 } = {}) {
-  const child = exec(resolveExecutable('hc', process.cwd()), args, { timeout, maxBuffer: 8 * 1024 * 1024 });
+  const child = exec(resolveExecutable('hc', process.cwd(), { skipShellProbe: true }), args, { timeout, maxBuffer: 8 * 1024 * 1024 });
   child.child.stdin?.on('error', () => {});
   child.child.stdin?.end();
   return child.then(({ stdout }) => stdout, error => {
@@ -502,7 +635,7 @@ function connect(method, params) {
   const maxFrame = 64 * 1024 * 1024;
   const id = 1;
   return new Promise((resolve, reject) => {
-    const child = spawn(resolveExecutable('hc', process.cwd()), ['connect'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const child = spawn(resolveExecutable('hc', process.cwd(), { skipShellProbe: true }), ['connect'], { stdio: ['pipe', 'pipe', 'ignore'] });
     const timer = setTimeout(() => finish(new CliError('hc connect: timed out')), 3000);
     let done = false, chunks = [], size = 0;
     function finish(error, response) {
@@ -569,11 +702,36 @@ function planTerminal(row, label, { runId, id, projectRoot, parent }) {
   return plan;
 }
 
+async function readTerminalTail(address) {
+  try {
+    const screen = await hc(['read', address], { timeout: 2000 });
+    const meaningful = screen.split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line && !/^[─━═\-_=│┃┌┐└┘├┤┬┴┼\s]+$/.test(line))
+      .slice(-12)
+      .slice(-3);
+    const joined = oneLine(meaningful.join(' | '));
+    return joined.length > 240 ? `...${joined.slice(-237)}` : joined;
+  } catch { return ''; }
+}
+
 async function spawnTerminal(plan, parent) {
   if (plan.reason) throw new CliError(plan.reason);
-  // hc treats a single argument with spaces or shell syntax as a shell line.
-  const argv = plan.command.length === 1 && /[^a-zA-Z0-9_./-]/.test(plan.command[0])
-    ? ['/usr/bin/env', plan.command[0]] : plan.command;
+  const machine = loadMachineConfigSync();
+  const envEntries = Object.entries(machine.env ?? {})
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `${key}=${value}`);
+  const inner = envEntries.length > 0 ? ['/usr/bin/env', ...envEntries, ...plan.command] : plan.command;
+  let argv;
+  if (process.env.HC_TEAM_NO_LOGIN_SHELL !== '1' && process.platform !== 'win32') {
+    const shell = resolveUserShell(machine);
+    argv = basename(shell) === 'fish'
+      ? [shell, '-l', '-i', '-c', 'exec $argv', '--', ...inner]
+      : [shell, '-ilc', 'exec "$@"', 'hc-team', ...inner];
+  } else {
+    // hc treats a single argument with spaces or shell syntax as a shell line.
+    argv = inner.length === 1 && /[^a-zA-Z0-9_./-]/.test(inner[0]) ? ['/usr/bin/env', inner[0]] : inner;
+  }
   const { address, reason, state } = await hcJson([
     'run', '--bg', '--json', '--no-notify', '--name', plan.name, '--cwd', plan.cwd,
     ...(parent === null ? ['--no-parent'] : ['--parent', parent]),
@@ -582,7 +740,11 @@ async function spawnTerminal(plan, parent) {
   ], { timeout: 15000 });
   if (!isLocal(address)) throw new CliError(reason ?? 'hc did not return a local terminal address');
   plan.address = address;
-  if (state === 'finished') throw new CliError(reason ?? 'Terminal exited during launch');
+  if (state === 'finished') {
+    const tail = await readTerminalTail(address);
+    const base = reason ?? 'Terminal exited during launch';
+    throw new CliError(tail ? `${base} (${tail})` : base);
+  }
 }
 
 async function deliver(address, text) {
@@ -599,23 +761,74 @@ async function deliver(address, text) {
 async function waitForRole(address) {
   const deadline = Date.now() + 45000;
   for (let remaining = deadline - Date.now(); remaining > 0; remaining = deadline - Date.now()) {
-    const state = await hcJson(['wait', '--json', '--timeout', String(Math.ceil(remaining / 1000)), address], { timeout: remaining });
+    const state = await hcJson(['wait', '--json', '--timeout', String(Math.ceil(remaining / 1000)), address], { timeout: remaining + 5000 });
     if (state.reason === 'message') continue;
     if (state.reason === 'status' && ['idle', 'done'].includes(state.status)) return;
-    throw new CliError(`Terminal not ready: ${(state.reason === 'status' ? state.status : state.reason) ?? 'unknown'}`);
+    const detail = (state.reason === 'status' ? state.status : state.reason) ?? 'unknown';
+    const tail = await readTerminalTail(address);
+    throw new CliError(tail ? `Terminal not ready: ${detail} (${tail})` : `Terminal not ready: ${detail}`);
   }
-  throw new CliError('Terminal not ready: timeout');
+  const tail = await readTerminalTail(address);
+  throw new CliError(tail ? `Terminal not ready: timeout (${tail})` : 'Terminal not ready: timeout');
 }
 
-async function writeBrief(role, plan, snapshot, overlayDir, task) {
+async function resolveSkillPath(skillName, projectRoot) {
+  if (typeof skillName !== 'string' || !skillName || /[\\/]|^\.\.?$/.test(skillName)) return null;
+  const home = homedir();
+  const roots = [
+    join(projectRoot, 'skills'),
+    join(home, '.agents/skills'),
+    join(home, '.claude/skills'),
+    join(home, '.gemini/skills'),
+    join(home, '.gemini/antigravity-cli/skills'),
+    join(home, '.codex/skills'),
+    join(home, '.pi/agent/skills'),
+  ];
+  for (const dir of roots) {
+    const candidate = join(dir, skillName, 'SKILL.md');
+    if (await statFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function listOverlayTools(overlayDir) {
+  const dir = join(overlayDir, 'tools');
+  const names = await readdir(dir).catch(() => []);
+  return names
+    .filter(name => name !== 'README.md' && !name.startsWith('.'))
+    .sort()
+    .map(name => join(dir, name));
+}
+
+async function writeBrief(role, plan, snapshot, overlayDir, task, parent = null) {
   const runId = plan.labels[runLabel];
   const list = (label, values) => values.length ? `\n## ${label}\n${values.map(value => `- ${value}`).join('\n')}\n` : '';
+  const trimmedTask = task.trim();
+  const taskSection = trimmedTask || `Stand by for instructions from ${parent ? `parent (${parent})` : 'the operator'}. Read this brief and any project overlay files so you are ready, then wait without reporting a missing task.`;
+  const resolvedSkills = await Promise.all((role.skills ?? []).map(async name => {
+    const skillFile = await resolveSkillPath(name, plan.cwd);
+    return skillFile ? `${name} -> ${skillFile}` : name;
+  }));
+  const userToolsFile = toolsPath();
+  const hasUserTools = Boolean(await statFile(userToolsFile));
+  const overlayScripts = await listOverlayTools(overlayDir);
+  const contextFiles = [
+    ...(hasUserTools ? [`${userToolsFile} (global verified CLI/script playbook)`] : []),
+    join(overlayDir, 'shared.md'),
+    join(overlayDir, 'roles', `${role.id}.md`),
+    join(overlayDir, 'tools/README.md'),
+    ...overlayScripts.map(file => `${file} (project helper script)`),
+  ];
   const brief = `# ${role.title} (${role.id})\n\nRun: ${runId}\nProject: ${plan.cwd}\nPreset snapshot: ${snapshot}\n`
-    + `\n## Task\n${task || '(No task supplied.)'}\n\n## Role instructions\n${role.instructions}\n`
+    + `\n## Task\n${taskSection}\n\n## Role instructions\n${role.instructions}\n`
     + `\n## Mode\n${role.readOnly ? 'Read-only: inspect and report; do not edit project files.' : 'Make changes only within the task and assigned scope.'}\n`
-    + list('Skills (hints)', role.skills) + list('Ownership', role.owns)
+    + list('Preferred tools & scripts (use first)', role.tools ?? [])
+    + list('Skills (read SKILL.md before ad-hoc commands)', resolvedSkills)
+    + list('Ownership', role.owns)
     + list('Talks to', role.talksTo) + list('Checkpoints', role.checkpoints)
-    + `\n## Project context (read if present)\n- ${join(overlayDir, 'shared.md')}\n- ${join(overlayDir, 'roles', `${role.id}.md`)}\n- ${join(overlayDir, 'tools/README.md')}\n`
+    + `\n## Project context & playbooks (read before probing commands)\n${contextFiles.map(file => `- ${file}`).join('\n')}\n`
+    + `\n## Process discipline\n- Before guessing CLI flags or writing ad-hoc scripts, check the listed SKILL.md files, playbooks, project overlay files, and any project memory available in your harness (e.g., Hindsight).\n`
+    + `- If you hit a non-obvious tool gotcha or find a faster verified command, include it briefly in your \`hc-team send --kind result\` summary so future runs skip trial-and-error.\n`
     + `\n## Coordination\nUse \`hc-team send <role|parent> "<summary>" --kind <handoff|result|review|blocked|ask>\`.\n`
     + `Use \`hc-team servers --run ${runId}\` to discover server URLs.\n`;
   await writeFile(plan.briefPath, brief, { flag: 'wx', mode: 0o600 });
@@ -743,11 +956,15 @@ async function launch(id, options) {
         plan.address = active.address;
         throw new CliError('Role is already live; stop that terminal before replacing it');
       }
-      await writeBrief(selected[index], plan, snapshot, overlayPath(projectRoot, id), task);
+      await writeBrief(selected[index], plan, snapshot, overlayPath(projectRoot, id), task, parent);
       await spawnTerminal(plan, parent);
       await waitForRole(plan.address);
       await delay(800);
-      Object.assign(plan, await deliver(plan.address, `Read ${plan.briefPath}. Task: ${oneLine(task)}`));
+      const trimmedTask = oneLine(task);
+      const kickoff = trimmedTask
+        ? `Read ${plan.briefPath}. Task: ${trimmedTask}`
+        : `Read ${plan.briefPath}. Stand by for instructions from ${parent ? `parent (${parent})` : 'the operator'}.`;
+      Object.assign(plan, await deliver(plan.address, kickoff));
     } catch (error) {
       plan.reason = messageOf(error);
     } finally {
@@ -758,6 +975,28 @@ async function launch(id, options) {
       }
     }
   }));
+  if (options['notify-parent'] && parent !== null && roles.some(role => role.sent)) {
+    const readyRoles = roles.filter(role => role.sent).map((role, _i) => {
+      const spec = selected.find(r => r.id === role.id);
+      return `- ${role.id} (${role.address}): ${spec?.title ?? role.id}`;
+    });
+    const failedRoles = roles.filter(role => !role.sent).map(role => `- ${role.id}: failed (${role.reason ?? 'unknown'})`);
+    const readyServers = servers.filter(srv => srv.urls?.length).map(srv => `- ${srv.id}: ${srv.urls.join(', ')}`);
+    const parentMessage = [
+      `[hc-team] ${existing ? 'Added roles to' : 'Launched'} ${preset.name} (${id}) · run #${runId}`,
+      'Active roles:', ...readyRoles,
+      ...(readyServers.length ? ['Servers:', ...readyServers] : []),
+      ...(failedRoles.length ? ['Unavailable:', ...failedRoles] : []),
+      `Follow the user's next message in this session and coordinate these teammates per preset ${id} (\`hc-team send <role> "<summary>" --kind handoff\`, \`hc-team status ${runId}\`, \`hc-team stop ${runId}\`).`,
+    ].join('\n');
+    try {
+      await deliver(parent, parentMessage);
+      result.parentNotified = true;
+    } catch (error) {
+      result.parentNotified = false;
+      result.parentNoticeError = messageOf(error);
+    }
+  }
   return {
     ...result,
     servers: servers.map(({ id, address, name, ready, urls, reason }) => ({ id, address, name, ready, urls, reason })),
@@ -942,20 +1181,76 @@ async function presetInput(options, implicitStdin) {
   return parseJson(text, 'stdin');
 }
 
-const usage = `Usage: hc-team <schema|seed|preset|routes|models|init-project|launch|send|status|stop|servers> [options]\n`
+const usage = `Usage: hc-team <schema|seed|preset|routes|models|machine|init-project|launch|send|status|stop|servers> [options]\n`
   + `Preset commands: list, get <id>, validate, save, delete <id>\n`
   + `Routes: routes [--json] | routes save (--json <text> | --file <path> | --stdin) [--expected-sha <sha>]\n`
-  + `Models: models save (--text <text> | --file <path> | --stdin) [--expected-sha <sha>]\n`;
+  + `Models: models save (--text <text> | --file <path> | --stdin) [--expected-sha <sha>]\n`
+  + `Machine: machine show [--json] | machine detect [--write] [--json] | machine save (--json <text> | --file <path> | --stdin) [--expected-sha <sha>]\n`;
+
+async function collectReferencedExecutables() {
+  const names = new Set(['hc']);
+  const { routes } = await loadRoutes().catch(() => ({ routes: {} }));
+  for (const entry of Object.values(routes)) {
+    const exe = entry?.command?.[0];
+    if (exe && !exe.includes('/')) names.add(exe);
+  }
+  for (const file of await jsonFiles(getPresetsDir())) {
+    try {
+      const raw = await readJson(join(getPresetsDir(), file));
+      for (const role of raw?.roles ?? []) {
+        const exe = role?.command?.[0];
+        if (exe && !exe.includes('/')) names.add(exe);
+      }
+      for (const srv of raw?.servers ?? []) {
+        const exe = srv?.command?.[0];
+        if (exe && !exe.includes('/')) names.add(exe);
+      }
+    } catch { /* Ignore malformed presets while inspecting machine executables. */ }
+  }
+  return [...names].sort();
+}
+
+async function inspectMachine({ detect = false, write = false } = {}) {
+  const path = getMachineConfigPath();
+  const rawBytes = await readBytes(path, true);
+  const exists = rawBytes !== undefined;
+  const current = exists ? checkedMachine(parseJson(rawBytes, path), `Invalid machine config ${path}`)
+    : { schemaVersion: 1, executables: {}, path: [], env: {} };
+  const names = [...new Set([...await collectReferencedExecutables(), ...Object.keys(current.executables)])].sort();
+  const nextExecutables = { ...current.executables };
+  const executables = names.map(name => {
+    const configured = Object.hasOwn(current.executables, name) ? current.executables[name] : null;
+    try {
+      const probe = resolveExecutableWithSource(name, process.cwd(), { ignoreMachine: detect });
+      if (detect) nextExecutables[name] = probe.resolved;
+      return { name, configured, resolved: probe.resolved, ok: true, source: probe.source };
+    } catch (error) {
+      return { name, configured, resolved: null, ok: false, source: 'missing', error: messageOf(error) };
+    }
+  });
+  let config = current;
+  let sha = rawBytes ? sha256(rawBytes) : null;
+  if (detect) {
+    config = { schemaVersion: 1, executables: nextExecutables, path: current.path, env: current.env };
+    if (write) {
+      const data = pretty(config);
+      await atomicWrite(path, data, { replace: true });
+      machineConfigCache = { path, config };
+      sha = sha256(data);
+    }
+  }
+  return { path, exists: exists || Boolean(detect && write), sha, config, executables };
+}
 
 async function main(rawArgs) {
   const leadingJson = rawArgs[0] === '--json';
   const [verb, ...rest] = leadingJson ? rawArgs.slice(1) : rawArgs;
   const [sub, ...subArgs] = rest;
-  if (!verb || ['-h', '--help'].includes(verb) || (verb === 'preset' && ['-h', '--help'].includes(sub))) {
+  if (!verb || ['-h', '--help'].includes(verb) || (['preset', 'machine'].includes(verb) && ['-h', '--help'].includes(sub))) {
     process.stdout.write(usage);
     return;
   }
-  const hasSub = verb === 'preset' || ((verb === 'routes' || verb === 'models') && sub === 'save');
+  const hasSub = verb === 'preset' || verb === 'machine' || ((verb === 'routes' || verb === 'models') && sub === 'save');
   const action = hasSub ? `${verb} ${sub}` : verb;
   const args = hasSub ? subArgs : rest;
   const options = {};
@@ -969,13 +1264,14 @@ async function main(rawArgs) {
     'preset delete': {}, 'init-project': { cwd: 'value' },
     routes: {}, 'routes save': { ...inputSpec, 'expected-sha': 'value' },
     'models save': { ...inputSpec, text: 'value', 'expected-sha': 'value' },
-    launch: { cwd: 'value', parent: 'value', 'no-parent': 'flag', roles: 'value', task: 'value', 'with-servers': 'flag', run: 'value', 'dry-run': 'flag' },
+    'machine show': {}, 'machine detect': { write: 'flag' }, 'machine save': { ...inputSpec, 'expected-sha': 'value' },
+    launch: { cwd: 'value', parent: 'value', 'no-parent': 'flag', 'notify-parent': 'flag', roles: 'value', task: 'value', 'with-servers': 'flag', run: 'value', 'dry-run': 'flag' },
     send: { kind: 'value', artifact: 'value', run: 'value', from: 'value' },
     status: {}, stop: { force: 'flag' }, servers: { run: 'value', spaces: 'value' },
   };
   try {
     if (!Object.hasOwn(specs, action)) throw new CliError(`Unknown command: ${action}`);
-    const jsonInput = ['preset save', 'preset validate', 'routes save'].includes(action);
+    const jsonInput = ['preset save', 'preset validate', 'routes save', 'machine save'].includes(action);
     const positional = parseOptions(args, specs[action], options, jsonInput);
     if (options.help) { process.stdout.write(usage); return; }
     const min = action === 'send' ? 2 : ['preset get', 'preset delete', 'init-project', 'launch', 'stop'].includes(action) ? 1 : 0;
@@ -1101,6 +1397,32 @@ async function main(rawArgs) {
         await atomicWrite(path, data, { replace: true, expectedSha: options['expected-sha'] });
         result = { modelsPath: path, modelsSha: sha256(data) };
         output = `Saved model profiles: ${path}`;
+        break;
+      }
+      case 'machine show': {
+        result = await inspectMachine({ detect: false });
+        output = [
+          `Machine config: ${result.path} (${result.exists ? 'present' : 'not saved'})`,
+          ...result.executables.map(row => `${row.name}\t${row.ok ? row.resolved : 'MISSING'}\t(${row.source})`),
+        ].join('\n');
+        break;
+      }
+      case 'machine detect': {
+        result = await inspectMachine({ detect: true, write: Boolean(options.write) });
+        output = [
+          `${options.write ? 'Saved' : 'Detected'} machine config: ${result.path}`,
+          ...result.executables.map(row => `${row.name}\t${row.ok ? row.resolved : 'MISSING'}\t(${row.source})`),
+        ].join('\n');
+        break;
+      }
+      case 'machine save': {
+        const config = checkedMachine(await presetInput(options, false));
+        const path = getMachineConfigPath();
+        const data = pretty(config);
+        await atomicWrite(path, data, { replace: true, expectedSha: options['expected-sha'] });
+        machineConfigCache = { path, config };
+        result = { path, sha: sha256(data), config };
+        output = `Saved machine config: ${path}`;
         break;
       }
       case 'preset delete':

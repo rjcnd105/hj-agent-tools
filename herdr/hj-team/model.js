@@ -74,11 +74,13 @@ export function sortPresets(presets, lastUsedMap = {}) {
     || a.name.localeCompare(b.name));
 }
 
-export function buildLaunchArgs({ presetId, cwd, parent, selectedRoles, task, withServers }) {
+export function buildLaunchArgs({ presetId, cwd, parent, selectedRoles, task, withServers, runId, notifyParent }) {
   return [
-    "launch", presetId, "--json", "--cwd", cwd, ...(parent ? ["--parent", parent] : ["--no-parent"]),
+    "launch", presetId, "--json", "--cwd", cwd,
+    ...(runId ? ["--run", runId] : parent ? ["--parent", parent] : ["--no-parent"]),
     ...(selectedRoles?.length ? ["--roles", selectedRoles.join(",")] : []),
     ...(task ? [`--task=${task}`] : []), ...(withServers ? ["--with-servers"] : []),
+    ...(notifyParent ? ["--notify-parent"] : []),
   ];
 }
 
@@ -108,10 +110,54 @@ export function newPresetSkeleton() {
     schemaVersion: 1, id: "new-team", name: "New Team", description: "", servers: [],
     roles: [{
       id: "dev", title: "Developer", command: ["pi"], default: true, readOnly: false,
-      skills: [], owns: [], talksTo: [], checkpoints: [],
+      skills: [], tools: [], owns: [], talksTo: [], checkpoints: [],
       instructions: "Implement the assigned task and report the result.",
     }],
   };
+}
+
+function sameCommand(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+export function preparePresetForEdit(globalPreset, routes = {}) {
+  const autoCommands = {};
+  if (!globalPreset || typeof globalPreset !== "object" || !Array.isArray(globalPreset.roles)) {
+    return { doc: globalPreset, autoCommands };
+  }
+  const doc = {
+    ...globalPreset,
+    roles: globalPreset.roles.map(role => {
+      if (!role || typeof role !== "object" || !role.route || Object.hasOwn(role, "command")) return role;
+      const routeCmd = Object.hasOwn(routes, role.route) ? routes[role.route]?.command : null;
+      if (!Array.isArray(routeCmd)) return role;
+      if (typeof role.id === "string") autoCommands[role.id] = { route: role.route, command: [...routeCmd] };
+      const expanded = {};
+      for (const [key, value] of Object.entries(role)) {
+        expanded[key] = value;
+        if (key === "route") expanded.command = [...routeCmd];
+      }
+      return expanded;
+    }),
+  };
+  return { doc, autoCommands };
+}
+
+export function normalizePresetFromEdit(rawText, routes = {}, autoCommands = {}) {
+  let doc;
+  try { doc = JSON.parse(rawText); } catch { return rawText; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || !Array.isArray(doc.roles)) return rawText;
+  doc.roles = doc.roles.map(role => {
+    if (!role || typeof role !== "object" || Array.isArray(role)) return role;
+    if (!Object.hasOwn(role, "route") || !Object.hasOwn(role, "command")) return role;
+    const orig = typeof role.id === "string" && Object.hasOwn(autoCommands, role.id) ? autoCommands[role.id] : null;
+    const routeCmd = typeof role.route === "string" && Object.hasOwn(routes, role.route) ? routes[role.route]?.command : null;
+    const next = { ...role };
+    if (sameCommand(role.command, orig?.command) || sameCommand(role.command, routeCmd)) delete next.command;
+    else delete next.route;
+    return next;
+  });
+  return JSON.stringify(doc, null, 2);
 }
 
 export function buildModelSyncPrompt({ request, modelsPath, routesPath }) {
@@ -126,6 +172,51 @@ export function buildModelSyncPrompt({ request, modelsPath, routesPath }) {
     `1. 로컬 CLI(pi --list-models, agy models, claude/codex --help 등)로 실제 사용 가능한 모델과 플래그를 확인한다.`,
     `2. 웹 검색으로 최신 커뮤니티 평가·강점·약점을 날짜와 함께 조사해 _models.md에 추가 또는 갱신한다.`,
     `3. 공통 역할 라우팅(_routes.json) 변경이 필요하면 route별 이전->이후 변경안과 영향 역할(hc-team routes)을 제안하고, 승인 후 hc-team routes save로 저장한다.`,
+  ].join("\n");
+}
+
+export function buildPresetEditPrompt({ presetId, presetName, presetsDir, overlayDir, request }) {
+  const trimmed = String(request ?? "").trim();
+  if (!trimmed || !presetId) return null;
+  const globalPath = `${(presetsDir || "~/.herdr/hj-team").replace(/\/+$/, "")}/${presetId}.json`;
+  return [
+    `[hc-team preset edit] 프리셋: ${presetName ? `${presetName} (${presetId})` : presetId}`,
+    `요청: ${trimmed}`,
+    `대상 경로:`,
+    `- 전역 프리셋: ${globalPath}`,
+    ...(overlayDir ? [`- 프로젝트 오버레이(프로젝트 전용 규칙/스크립트용): ${overlayDir}`] : []),
+    `원칙:`,
+    `1. 전역 프리셋에는 특정 프로젝트·브랜치·브랜드·레포 전용 스크립트·세션 메모리 의존 내용을 넣지 않는다.`,
+    `2. 전역 수정은 \`hc-team preset get ${presetId} --json\`으로 읽은 뒤 \`hc-team preset save --stdin --update\`로 스키마 검증과 함께 저장한다.`,
+    `3. 현재 프로젝트에만 해당하는 규칙·명령·URL은 프로젝트 오버레이(\`docs/agent-presets/${presetId}/\`)에 반영한다.`,
+  ].join("\n");
+}
+
+export function buildMachineSetupPrompt({ machinePath, presetsDir } = {}) {
+  return [
+    `[hc-team machine setup] 이 컴퓨터의 hc-team 머신별 로컬 설정을 점검하고 세팅해줘.`,
+    `대상 파일:`,
+    `- 머신 로컬 설정(동기화 제외): ${machinePath || "~/.config/hc-team/machine.json"}`,
+    `- 전역 프리셋/라우트: ${presetsDir || "~/.herdr/hj-team"}`,
+    `절차:`,
+    `1. \`hc-team machine show --json\`으로 현재 라우트·프리셋이 참조하는 실행 파일과 누락 항목을 확인한다.`,
+    `2. 이 컴퓨터에 실제 설치된 에이전트 바이너리 경로(claude, codex, pi, agy, hc 등)를 확인한다. 가능하면 mise/asdf 심보다 실제 설치 바이너리 경로를 우선 잡는다.`,
+    `3. 비로그인 GUI(Herdr/launchd/systemd) 환경에서 필요한 필수 환경변수가 있다면 \`env\`에 기록한다.`,
+    `4. \`hc-team machine save --stdin\`(또는 \`hc-team machine detect --write\`)으로 저장하고, 최소 PATH 환경(\`PATH=/usr/bin:/bin hc-team launch <preset> --dry-run --json\`)으로 정상 해석되는지 검증한다.`,
+  ].join("\n");
+}
+
+export function buildOnboardingPrompt({ presetsDir, machinePath } = {}) {
+  const dir = presetsDir || "~/.herdr/hj-team";
+  return [
+    `[hc-team onboarding] 내 환경과 워크플로우에 맞게 ${dir} 의 팀 프리셋·모델 라우팅·도구 플레이북을 초기 세팅해줘.`,
+    `대상 경로:`,
+    `- 사용자 팀 설정 폴더: ${dir} (_routes.json, _models.md, _tools.md, <preset>.json)`,
+    `- 머신 로컬 실행 경로 설정: ${machinePath || "~/.config/hc-team/machine.json"}`,
+    `절차:`,
+    `1. 이 컴퓨터에 실제 설치된 에이전트 CLI(claude, codex, pi, agy 등)와 주요 로컬 도구·스킬(브라우저 QA, PR CLI, VCS 등)을 먼저 확인한다.`,
+    `2. 나에게 주로 하는 작업 유형, 선호하는 에이전트·모델 조합, 자주 쓰는 CLI/스크립트를 짧게 확인한다.`,
+    `3. 설치된 에이전트만으로 \`_routes.json\`(\`hc-team routes save --stdin\`)과 맞춤 프리셋(\`hc-team preset save --stdin\`), 반복 시행착오 방지용 \`_tools.md\`, 그리고 \`hc-team machine detect --write\`를 구성하고 \`--dry-run\`으로 검증한다.`,
   ].join("\n");
 }
 

@@ -69,7 +69,8 @@ Design principle:
     - `command`: non-empty array of non-empty strings (literal escape hatch).
   - `default`: boolean (default `true`).
   - `readOnly`: boolean (default `false`).
-  - `skills`: optional array of non-empty strings (default `[]`). (Brief hints only; not existence-checked.)
+  - `skills`: optional array of non-empty strings (default `[]`). (Launch resolves installed `SKILL.md` paths when found.)
+  - `tools`: optional array of non-empty strings (default `[]`). (Preferred CLIs, scripts, or playbooks injected into the brief to prevent trial-and-error.)
   - `owns`: optional array of non-empty strings (default `[]`). (Brief scope hints.)
   - `talksTo`: optional array of role IDs; each entry must match a `role.id` in the same preset and not itself (default `[]`).
   - `checkpoints`: optional array of non-empty strings (default `[]`).
@@ -137,8 +138,8 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
   - `--json` returns:
     ```json
     {
-      "presetsDir": "/Users/hj/.herdr/hj-team",
-      "projectRoot": "/Users/hj/work/app",
+      "presetsDir": "~/.herdr/hj-team",
+      "projectRoot": "/path/to/app",
       "presets": [
         {
           "id": "web-feature-squad",
@@ -147,7 +148,7 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
           "roleCount": 4,
           "defaultRoles": ["dev", "web-qa", "reviewer"],
           "hasOverlay": true,
-          "overlayDir": "/Users/hj/work/app/docs/agent-presets/web-feature-squad",
+          "overlayDir": "/path/to/app/docs/agent-presets/web-feature-squad",
           "preset": { ...mergedOrGlobalPreset }
         }
       ]
@@ -172,7 +173,8 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
 - `hc-team launch <presetId> [--cwd <dir>] [--parent <addr> | --no-parent] [--roles a,b] [--task "<text>"] [--with-servers] [--run <existingRunId>] [--dry-run] [--json]`
   - `--parent`: defaults to `$HC_TERMINAL_ID` if set, else `--no-parent`.
   - `--run <existingRunId>`: launches additional/replacement roles into an existing run.
-  - Automatically ensures `--no-daemon` for `codex` commands and resolves executable basename via `PATH` (including `~/.local/bin`, `~/.local/share/mise/shims`, `~/.cache/.bun/bin`, `/opt/homebrew/bin`).
+  - Automatically ensures `--no-daemon` for `codex` commands and resolves executable basename via `PATH`, then the user's login-shell `PATH` (when `HOME` is not sandboxed), then standard user/system bin fallbacks (`~/.local/bin`, `~/.cache/.bun/bin`, `~/.bun/bin`, `~/.volta/bin`, `~/.cargo/bin`, `~/.npm-global/bin`, `~/.nix-profile/bin`, `~/.local/share/mise/shims`, `/opt/homebrew/bin`, `/usr/local/bin`).
+  - When a role exits before readiness, captures the last non-empty lines via `hc read` into `plan.reason` so launch failures surface exact diagnostics.
   - Launches servers first (if `--with-servers`), waits up to 15s (non-fatal) for a listening socket attributed to each server terminal via `servers` scanner.
   - Launches selected roles in parallel (`hc run --bg --json`), waits for initial readiness (`hc wait`), sends the 1-line brief trigger `Read <briefPath>. Task: <task>` via `hc send`.
   - Returns JSON:
@@ -180,9 +182,9 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
     {
       "runId": "k4m9x2",
       "presetId": "web-feature-squad",
-      "projectRoot": "/Users/hj/work/app",
+      "projectRoot": "/path/to/app",
       "parent": "t114",
-      "runDir": "/Users/hj/.local/state/hc-team/runs/k4m9x2",
+      "runDir": "~/.local/state/hc-team/runs/k4m9x2",
       "servers": [{ "id": "web", "address": "t201", "name": "k4m9x2-web", "ready": true, "urls": ["http://localhost:3000"] }],
       "roles": [{ "id": "dev", "address": "t202", "name": "k4m9x2-dev", "sent": true, "reason": null, "briefPath": "..." }]
     }
@@ -229,7 +231,7 @@ All commands support `--json`. Validation/operational errors exit non-zero and p
         ]
       },
       "detached": [
-        { "url": "http://localhost:8000", "port": 8000, "protocol": "http", "host": "localhost", "pid": 16873, "comm": "python3.14", "cwd": "/Users/hj/..." }
+        { "url": "http://localhost:8000", "port": 8000, "protocol": "http", "host": "localhost", "pid": 16873, "comm": "python3.14", "cwd": "/path/to/app" }
       ],
       "updatedAt": 1795250000000
     }
