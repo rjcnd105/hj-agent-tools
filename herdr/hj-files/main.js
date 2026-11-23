@@ -157,6 +157,7 @@ export default class Files extends View {
           }
         }
         if (!this.current(context)) return;
+        context.top = top?.code === 0 ? top.stdout.trim() : null;
         this.marks = marks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) this.loading = false; cx.notify(); }
@@ -228,6 +229,17 @@ export default class Files extends View {
     return out;
   }
 
+  // Opens the project (its git top level, else the folder shown) in hj-menu's Open With.
+  projectMenu(e, cx) {
+    const context = this.context, path = context?.top ?? context?.cwd;
+    if (!path || context.on || !this.current(context) || window()?.platform !== "macos") return;
+    cx.stop_propagation();
+    const zoom = Number(settings().zoom) || 1, b = e.bounds;
+    // Below the button with right edges aligned; at the pointer before the button is painted.
+    const at = b ? { x: Math.max(0, b.x + b.width - 160 * zoom), y: b.y + b.height + 4 * zoom } : e.position;
+    openOverlay({ mod: filesConfig.menuMod, kind: "popup", width: 160, height: 44, at, props: { path, origin: at } });
+  }
+
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
@@ -235,7 +247,11 @@ export default class Files extends View {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? "")))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        // Open With runs /usr/bin/open on this Mac, so remote folders get no button.
+        .when(Boolean(this.root) && !this.on && window()?.platform === "macos", el => el.child(div().id("files-more").size(22).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
+          .on_mouse_down("left", (e, cx) => this.projectMenu(e, cx))
+          .child(svg("mods/hj-files/ellipsis-vertical.svg").size(14).text_color(t.muted)))))
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child(`File list limited to ${filesConfig.perFolderLimit.toLocaleString()} entries per folder and ${filesConfig.totalLimit.toLocaleString()} total`)))))
