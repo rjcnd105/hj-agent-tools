@@ -83,6 +83,10 @@ herdr-mods:
       rsync -a --delete --exclude=gpui-kit.d.ts --exclude=jsconfig.json "${libs[@]}" "$mod" "$dest/"
     done
 
+# Rebuild hj-review's Lezer parsers (herdr/hj-review/lezer) from herdr/lezer's pinned packages
+herdr-lezer:
+    cd herdr/lezer && npm ci && node build.mjs
+
 register:
     claude plugin marketplace add {{github}}
     claude plugin install {{plugin}}@{{plugin}}

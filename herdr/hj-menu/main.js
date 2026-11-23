@@ -1,4 +1,6 @@
-// One Open With menu for both the Files and Changes panels.
+// One Open With menu for both the Files and Changes panels. A caller may put its own items above
+// Open With: props.actions = [{ label, icon?, overlay }], each opening that overlay spec when chosen.
+// The popup is 31px per row plus 13 tall: 44 for Open With alone, 75 with one action.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle, Scrollbar } from "gpui-base";
 import { props, theme, settings, home, checking, readTextFile, writeTextFile, exec, notify, openOverlay, closeOverlay } from "herdr";
@@ -30,7 +32,9 @@ const GROUP = { label: "Open With" };
 const CONFIG = { label: "Config" };
 const ICONS = "mods/workspace-chrome";
 const ROW = 31, PAD = 5, INSET = 8, SEPARATOR = 9;
-const MENU_WIDTH = 160, MENU_HEIGHT = 44, SUB_WIDTH = 140, SUB_MAX_ROWS = 12;
+const MENU_WIDTH = 160, SUB_WIDTH = 140, SUB_MAX_ROWS = 12;
+// The root popup's height for this many rows (44 for Open With alone).
+const rootHeight = rows => rows * ROW + 2 * (PAD + 1) + 1;
 // Keep the two overlays' lifetimes together without persisting menu state.
 const roots = new Map();
 let escapeBound = false;
@@ -61,8 +65,9 @@ export default class FileMenu extends View {
     this.at = 0;
     this.group = null;
     this.origin = this.data.origin ?? window.mouse_position();
+    const actions = Array.isArray(this.data.actions) ? this.data.actions.filter(a => typeof a?.label === "string" && a.overlay) : [];
     this.items = typeof this.data.path === "string" && this.data.path.startsWith("/")
-      ? this.data.parent ? roots.get(this.data.parent)?.submenu ?? [CONFIG] : [GROUP] : [];
+      ? this.data.parent ? roots.get(this.data.parent)?.submenu ?? [CONFIG] : [...actions, GROUP] : [];
     if (this.data.listHeight) this.scroll = VirtualListScrollHandle.new();
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -74,6 +79,8 @@ export default class FileMenu extends View {
   }
 
   closeGroup(refocus = false) {
+    // A submenu still reading its editors gives up too (the pointer moved on before it opened).
+    this.groupSeq = (this.groupSeq ?? 0) + 1;
     if (!this.group) return;
     const id = this.group;
     this.group = null;
@@ -94,6 +101,7 @@ export default class FileMenu extends View {
 
   dismiss() {
     const root = this.data.parent ? roots.get(this.data.parent) : this;
+    if (root) root.dismissed = true;
     root?.closeGroup();
     const id = root?.data.overlay ?? this.data.overlay;
     if (id) closeOverlay(id);
@@ -102,6 +110,7 @@ export default class FileMenu extends View {
   showGroup(bounds, cx) {
     if (this.group || this.opening) return;
     this.opening = true;
+    const seq = this.groupSeq ?? 0;
     cx.spawn(async () => {
       try {
         let error;
@@ -112,7 +121,7 @@ export default class FileMenu extends View {
           catch (err) { editors = DEFAULT_EDITORS; error = err; }
           this.submenu = [...editors, CONFIG];
         }
-        if (roots.get(this.data.overlay) !== this) return;
+        if (roots.get(this.data.overlay) !== this || this.dismissed || (this.groupSeq ?? 0) !== seq) return;
         if (error) notify({ title: "Could not read Open With config", body: `Using defaults. ${error.message ?? error}`, level: "error" });
 
         const zoom = Number(settings().zoom) || 1;
@@ -121,8 +130,8 @@ export default class FileMenu extends View {
         // Hover supplies the row bounds; from the keyboard, use the clamped click position.
         if (!bounds) {
           const left = Math.max(0, Math.min(this.origin.x, width - MENU_WIDTH * zoom));
-          const top = Math.max(0, Math.min(this.origin.y, height - MENU_HEIGHT * zoom));
-          bounds = { x: left + edge, y: top + edge, width: MENU_WIDTH * zoom - 2 * edge };
+          const top = Math.max(0, Math.min(this.origin.y, height - rootHeight(this.items.length) * zoom));
+          bounds = { x: left + edge, y: top + edge + this.items.indexOf(GROUP) * ROW * zoom, width: MENU_WIDTH * zoom - 2 * edge };
         }
         const right = bounds.x + bounds.width + edge;
         const left = bounds.x - edge - SUB_WIDTH * zoom;
@@ -144,6 +153,11 @@ export default class FileMenu extends View {
 
   choose(item, cx, bounds) {
     if (item === GROUP) return this.showGroup(bounds, cx);
+    if (item.overlay) {
+      this.dismiss();
+      openOverlay(item.overlay);
+      return;
+    }
     if (this.launching) return;
     this.launching = true;
     cx.spawn(async () => {
@@ -184,12 +198,15 @@ export default class FileMenu extends View {
     const row = (item, i) => h_flex().id(`row-${i}`).h(ROW).flex_none().px(INSET).gap(9).rounded(7).items_center()
       .when(i === this.at, el => el.bg(t.selected))
       .when(item === GROUP, el => el.child(svg(`${ICONS}/folder.svg`).size(14).flex_none().text_color(t.muted)))
+      .when(Boolean(item.overlay), el => el.child(item.icon ? svg(item.icon).size(14).flex_none().text_color(t.muted) : div().w(14).flex_none()))
       .child(div().flex_1().min_w(0).truncate().child(item.label))
       .when(item === GROUP, el => el.child(svg(`${ICONS}/chevron-right.svg`).size(12).flex_none().text_color(t.muted)));
     const actionRow = (item, i) => row(item, i)
       .on_mouse_move((e, cx) => {
+        // Leaving Open With for an item above it closes its submenu.
         if (item === GROUP) this.showGroup(e.bounds, cx);
-        else if (this.at !== i) { this.at = i; cx.notify(); }
+        else if (!this.data.parent) this.closeGroup();
+        if (this.at !== i) { this.at = i; cx.notify(); }
       })
       .on_click((e, cx) => this.choose(item, cx, e.bounds));
     const menu = v_flex().id("hj-file-menu").key_context("HjFileOpenWith").track_focus(this.handle)

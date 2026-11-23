@@ -5,3 +5,5 @@ gpui-kit.d.ts
 jsconfig.json
 # Working plans and reviews from agent sessions (hc-po writes here): kept local
 docs/plans/
+# Build inputs for herdr/hj-review/lezer: `just herdr-lezer` installs them
+herdr/lezer/node_modules/

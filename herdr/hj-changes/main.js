@@ -1,9 +1,10 @@
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
-import { spaces, panes, agents, focused, exec, hc, home, checking, window, readTextFile, watchFolder, theme, settings, openOverlay } from "herdr";
+import { spaces, panes, agents, focused, exec, hc, home, checking, window, layout, readTextFile, watchFolder, theme, settings, openOverlay } from "herdr";
 import { MAIN, projectSlug, parseSession, parseMeta, shortLabels, promptWorktree, parseWorktreeList, worktreeTargets, visibleTargets, pickTarget, countEntries } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
+import { shownIn } from "./shown.js";
 
 const DEFAULT_CONFIG = {
   pollMs: 10000,
@@ -11,6 +12,7 @@ const DEFAULT_CONFIG = {
   statusJobs: 4,
   claudeDir: null,
   menuMod: "hj-menu",
+  reviewMod: "hj-review",
 };
 const modConfig = createModConfig({
   mod: "hj-changes",
@@ -23,6 +25,7 @@ const modConfig = createModConfig({
       statusJobs: posInt(parsed?.statusJobs, DEFAULT_CONFIG.statusJobs, 1),
       claudeDir: typeof parsed?.claudeDir === "string" && parsed.claudeDir.trim() ? parsed.claudeDir.trim() : null,
       menuMod: typeof parsed?.menuMod === "string" && parsed.menuMod.trim() ? parsed.menuMod.trim() : DEFAULT_CONFIG.menuMod,
+      reviewMod: typeof parsed?.reviewMod === "string" && parsed.reviewMod.trim() ? parsed.reviewMod.trim() : DEFAULT_CONFIG.reviewMod,
     };
   },
   home, exec, readTextFile, checking,
@@ -30,6 +33,7 @@ const modConfig = createModConfig({
 let changesConfig = { ...DEFAULT_CONFIG };
 const mountConfig = (view, cx) => modConfig.mount(view, cx, {
   watchFolder,
+  shown: () => shownIn(layout(), "hj-changes"),
   onConfig({ config }) { changesConfig = config; },
   onChange(_result, cx) { cx.notify(); },
 });
@@ -42,13 +46,22 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, terminal: f?.shown || pane?.terminal || f?.terminal || null };
 }
 const key = () => JSON.stringify(location());
-const isClaude = (terminal) => (panes().find((p) => p.terminal === terminal)?.app ?? agents().find((a) => a.address === terminal)?.app) === "claude-code";
+const claudeDir = () => changesConfig.claudeDir ? expandHome(changesConfig.claudeDir, home()) : `${home()}/.claude`;
+// The agent app a terminal runs ("claude-code", "pi", …), or null for a shell.
+const appOf = (terminal) => panes().find((p) => p.terminal === terminal)?.app ?? agents().find((a) => a.address === terminal)?.app ?? null;
+const isClaude = (terminal) => appOf(terminal) === "claude-code";
 // Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
-// the folder watch would see it, and every refresh would start the next one.
-const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
+// the folder watch would see it, and every refresh would start the next one. A path is a path,
+// not a pattern (`[id].tsx`).
+const READ = ["--no-optional-locks", "--literal-pathspecs", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const STATUS = ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"];
 const PROMPT_CHARS = 20000;
 const countLines = (text) => text ? text.split("\n").length - Number(text.endsWith("\n")) : 0;
+
+// Text elements draw Geist Mono's programming ligatures (`...`, `??`, `=>`) at the wrong width,
+// covering the next cells: a zero-width non-joiner between punctuation marks keeps them apart.
+// The same as hj-review's model.js `unligature`.
+const unligature = (text) => text.replace(/([!-/:-@[-`{-~])(?=[!-/:-@[-`{-~])/g, "$1\u200c");
 
 // Text draws a tab as nothing: pad each to the next 4-column stop.
 const untab = (text) => text.replace(/[^\t]*\t/g, (s) => s.slice(0, -1).padEnd((s.length - 1) - (s.length - 1) % 4 + 4));
@@ -85,20 +98,24 @@ export default class Changes extends View {
     if (checking()) return;
     mountConfig(this, cx);
     this.refresh(cx);
-    // A tick while a load runs is dropped, not queued: a slow repo must not keep the panel loading.
-    const schedule = (cx) => {
-      this.pollTimer = cx.timer.after(changesConfig.pollMs, (cx) => {
-        if (window()?.active !== false && !this.loading && !this.busy) this.refresh(cx);
-        schedule(cx);
-      });
-    };
-    schedule(cx);
+    this.poll(cx);
+  }
+
+  // A tick while a load runs is dropped, not queued: a slow repo must not keep the panel loading.
+  // A tick that finds the panel hidden ends the timer; the render that shows it starts it again.
+  poll(cx) {
+    this.pollTimer = cx.timer.after(changesConfig.pollMs, (cx) => {
+      this.pollTimer = null;
+      if (window()?.active !== false && !this.loading && !this.busy) this.refresh(cx);
+      if (!this.stale) this.poll(cx);
+    });
   }
 
   close() {
     this.pollTimer?.cancel?.();
     this.unwatch();
     modConfig.unmount(this);
+    this.input.release();
   }
 
   watch(root, cx) {
@@ -125,7 +142,7 @@ export default class Changes extends View {
   // The session behind the focused Claude terminal, and its subagents' worktrees that still exist.
   // Throws when a lookup fails, so the caller keeps what it shows instead of dropping the targets.
   async discover(terminal) {
-    const claude = changesConfig.claudeDir ? expandHome(changesConfig.claudeDir, home()) : `${home()}/.claude`;
+    const claude = claudeDir();
     let pid = null;
     try { pid = JSON.parse((await hc(["get", terminal, "--json"])).stdout)?.foreground?.pid ?? null; } catch {}
     let session = pid ? parseSession(await readTextFile(`${claude}/sessions/${pid}.json`).catch(() => null)) : null;
@@ -201,6 +218,9 @@ export default class Changes extends View {
   // `discover`: also look for the session's worktrees (focus change, timer), not only reread the shown one.
   refresh(cx, discover = true) {
     if (checking()) return;
+    // A hidden panel lets go of its watch and timer: render refreshes and restarts them when it shows.
+    if (!shownIn(layout(), "hj-changes")) { this.stale = true; this.unwatch(); return; }
+    this.stale = false;
     if (this.loading || this.busy) { this.pending = true; this.pendingDiscover ||= discover; return; }
     const { cwd, on, terminal } = location(), context = key();
     if (context !== this.context) {
@@ -335,24 +355,55 @@ export default class Changes extends View {
     cx.notify();
   }
 
-  chip(id, label, count, running, t) {
+  // The Review window (hj-review) for a subagent worktree, against the session's checkout, with the
+  // comments relayed through this session; or, with no target, for the shown checkout's uncommitted
+  // changes, with the comments sent to the agent in this terminal.
+  reviewOverlay(target) {
+    const session = this.session, { on, terminal } = location();
+    if (on || this.context !== key()) return null;
+    const common = { terminal, app: terminal ? appOf(terminal) : null, claudeDir: claudeDir() };
+    const props = target
+      ? session && {
+        ...common, root: target.path, parentCwd: session.cwd, sessionId: session.sessionId, branch: target.branch,
+        agent: { id: target.agentId, to: target.name || target.agentId, label: target.label },
+      }
+      : this.root && { ...common, root: this.root, sessionId: session?.sessionId ?? null };
+    return props ? { mod: changesConfig.reviewMod, kind: "window", key: "hj-review", width: 0.86, height: 0.86, props } : null;
+  }
+
+  // Right-click a worktree chip: Review it, or Open With.
+  targetMenu(target, e, cx) {
+    const review = this.reviewOverlay(target);
+    if (!review) return;
+    cx.stop_propagation();
+    // Open With runs /usr/bin/open: elsewhere the menu would hold Review alone.
+    if (window()?.platform !== "macos") return void openOverlay(review);
+    const at = e.position;
+    openOverlay({ mod: changesConfig.menuMod, kind: "popup", width: 160, height: 75, at,
+      props: { path: target.path, origin: at, actions: [{ label: "Review", icon: `mods/${changesConfig.reviewMod}/review.svg`, overlay: review }] } });
+  }
+
+  chip(id, label, count, running, t, target = null) {
     const on = this.selected === id;
     return h_flex().id(`target-${id}`).h(24).flex_none().px(8).gap(5).items_center().rounded(6).border_1().border_color(on ? t.accent : t.border)
       .when(on, (e) => e.bg(t.selected)).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.choose(id, cx))
+      .when(Boolean(target), (e) => e.tooltip("Right-click to review").on_mouse_down("right", (ev, cx) => this.targetMenu(target, ev, cx)))
       .when(running, (e) => e.child(div().w(6).h(6).flex_none().rounded_full().bg(t.ansi3)))
       .child(div().max_w(140).truncate().text_size(11).child(label))
       .when(count !== null, (e) => e.child(div().text_size(10).text_color(t.dim).child(String(count))));
   }
 
   diffRow({ kind, number, text }, t) {
-    if (kind === "@") return div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(text);
+    if (kind === "@") return div().w_full().px(12).h(20).flex_none().truncate().bg(t.raised).text_color(t.dim).child(unligature(text));
     return h_flex().w_full().h(20).flex_none().gap(10).when(kind === "+", (e) => e.bg(t.ansi2 + "18")).when(kind === "-", (e) => e.bg(t.ansi1 + "18"))
       .child(div().w(30).flex_none().text_right().text_color(t.dim).child(number === undefined ? "" : String(number)))
-      .child(div().flex_1().min_w(0).truncate().child(text));
+      .child(div().flex_1().min_w(0).truncate().child(unligature(text)));
   }
 
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    modConfig.wake(this, cx);
+    if (key() !== this.context || this.stale) this.refresh(cx);
+    if (!this.pollTimer && !checking()) this.poll(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const running = Boolean(this.active()?.running);
     const enabled = Boolean(this.message.trim() && this.root && !this.busy && !this.loading && !running);
@@ -363,12 +414,17 @@ export default class Changes extends View {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Changes"))
         .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`))
-        .child(div().flex_1()).child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`)))
+        .child(div().flex_1()).child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`))
+        // Reviews the shown target: the checkout's uncommitted changes, or a worktree since its merge-base.
+        .when(Boolean(this.root && !this.on), (e) => e.child(div().id("changes-review").size(24).flex().flex_none().items_center().justify_center().rounded(6)
+          .cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(this.active() ? "Review this worktree" : "Review these changes")
+          .on_click((_e, cx) => { const review = this.reviewOverlay(this.active()); if (review) openOverlay(review); })
+          .child(svg(`mods/${changesConfig.reviewMod}/review.svg`).size(14).text_color(t.muted)))))
       // One chip per subagent worktree, plus the session's own checkout; shown only when there is a worktree.
       // Wrapped, not scrolled sideways: a team of 6+ would otherwise hide most chips past the panel edge.
       .when(this.targets.length > 0, (el) => el.child(h_flex().id("changes-targets").flex_none().flex_wrap().px(8).py(6).gap(6).items_center().border_b(1).border_color(t.border)
         .child(this.chip(MAIN, "main", this.mainCount, false, t))
-        .children(this.targets.map((w) => this.chip(w.path, w.short, w.count, w.running, t)))))
+        .children(this.targets.map((w) => this.chip(w.path, w.short, w.count, w.running, t, w)))))
       // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
       .child(div().flex_1().min_h(44).max_h(this.files.length * 28 + 12).relative().border_b(1).border_color(t.border)
         .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(this.files.map((f) => {
