@@ -98,9 +98,9 @@ export const isLine = (row) => row?.kind === "+" || row?.kind === "-" || row?.ki
  *    part since the call before. */
 export function painter(rows, long = 1000) {
   const sides = [], sideOf = new Int32Array(rows.length).fill(-1), posOf = new Int32Array(rows.length);
-  const open = () => { const s = { id: sides.length, list: [], lines: [], own: [], starts: [], done: 0, parse: null }; sides.push(s); return s; };
+  const open = () => { const s = { id: sides.length, list: [], lines: [], own: [], starts: [], done: 0, last: 0, parse: null }; sides.push(s); return s; };
   const put = (s, i, own) => {
-    if (own) { sideOf[i] = s.id; posOf[i] = s.list.length; }
+    if (own) { sideOf[i] = s.id; posOf[i] = s.list.length; s.last = s.list.length + 1; }
     s.list.push(i); s.own.push(own); s.lines.push(rows[i].text.length > long ? "" : rows[i].text);
   };
   let next = null, old = null;
@@ -131,6 +131,7 @@ export function painter(rows, long = 1000) {
         }
       }
       s.done = to;
+      if (s.done >= s.last) { s.parse = null; s.text = ""; }
       return [s.list[from], s.list[to - 1]];
     },
   };
@@ -154,6 +155,11 @@ export function segments(text, runs = []) {
   for (const [from, to, key] of runs) { add(text.slice(at, from), null); add(text.slice(from, to), key); at = to; }
   add(text.slice(at), null);
   return out;
+}
+
+/** Pre-merged [unligaturedText, key] pieces for a row, cached so render() does no slicing or regex work. */
+export function pieces(text, runs = []) {
+  return segments(text, runs).map(([piece, key]) => [unligature(piece), key]);
 }
 
 // Characters the mono font has no glyph for, drawn by a fallback font about twice as wide: Hangul,

@@ -7,7 +7,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
 import { props, theme, settings, fonts, exec, hc, home, readTextFile, writeTextFile, checking, closeOverlay } from "herdr";
-import { isLine, parseDiff, addedRows, parseFiles, painter, segments, unligature, cells, wrap, range, anchor, anchorRow, moved, place, feedback } from "./model.js";
+import { isLine, parseDiff, addedRows, parseFiles, painter, pieces, unligature, cells, wrap, range, anchor, anchorRow, moved, place, feedback } from "./model.js";
 import { languageOf, spanner } from "./syntax.js";
 import { Scroller } from "./scroller.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
@@ -107,7 +107,7 @@ export default class Review extends View {
   init(_props, cx) {
     this.p = props() ?? {};
     this.files = []; this.byPath = new Map(); this.gone = []; this.order = [];
-    // path → { rows, note, cut, widest, done, loading, stale, token, lang, painter, colors, under, block, first, at }.
+    // path → { rows, note, cut, widest, done, loading, stale, token, lang, painter, pieces, under, block, first, at }.
     this.diffs = new Map(); this.loads = 0;
     // What the scroll draws: { kind: "head" | "row" | "note" | "comment" | "gap", path, ... }.
     this.items = []; this.heads = new Map();
@@ -283,7 +283,7 @@ export default class Review extends View {
   loadDiff(file, cx) {
     const { path } = file;
     let d = this.diffs.get(path);
-    if (!d) this.diffs.set(path, d = { rows: null, note: null, cut: 0, widest: 0, done: false, lang: languageOf(path), painter: null, colors: new Map(), under: new Set(), block: null, first: 0, at: null });
+    if (!d) this.diffs.set(path, d = { rows: null, note: null, cut: 0, widest: 0, done: false, lang: languageOf(path), painter: null, pieces: new Map(), under: new Set(), block: null, first: 0, at: null });
     const token = d.token = {}, base = this.base;
     d.loading = true; d.stale = false; this.loads++;
     cx.spawn(async (cx) => {
@@ -303,7 +303,7 @@ export default class Review extends View {
       if (this.closed || d.token !== token || this.diffs.get(path) !== d) return;
       const next = diff?.rows ?? null;
       // The same text keeps its colours, so a refresh that changed nothing doesn't flash.
-      if (!next || !d.rows || !sameText(next, d.rows)) { d.painter = next && d.lang ? painter(next) : null; d.colors = new Map(); }
+      if (!next || !d.rows || !sameText(next, d.rows)) { d.painter = next && d.lang ? painter(next) : null; d.pieces = new Map(); }
       d.rows = next; d.note = note; d.cut = diff && diff.total > MAX_ROWS ? diff.total : 0; d.done = true; d.loading = false;
       d.widest = 0;
       for (const row of next ?? []) d.widest = Math.max(d.widest, cells(row.text));
@@ -333,7 +333,14 @@ export default class Review extends View {
           const start = await spanner(d.lang).catch(() => null);
           if (!start) { d.lang = null; continue; }
           if (d.painter !== p) continue;
-          const [from, to] = p.step(i, PAINT_ROWS, start, d.colors);
+          const batch = new Map();
+          let from, to;
+          try { [from, to] = p.step(i, PAINT_ROWS, start, batch); }
+          catch {
+            if (d.painter === p) { d.painter = null; d.pieces.clear(); unseen = true; }
+            continue;
+          }
+          for (const [r, runs] of batch) d.pieces.set(r, pieces(d.rows[r].text, runs));
           // Redraw for rows on screen; the rest show when the view reaches them.
           if (this.onScreen(d, from, to + 1)) cx.notify(); else unseen = true;
           await cx.sleep(1);
@@ -847,15 +854,17 @@ export default class Review extends View {
       .child(div().w(M.NUM).flex_none().text_right().text_color(t.dim).child(row.old === undefined ? "" : String(row.old)))
       .child(div().w(M.NUM).flex_none().text_right().text_color(t.dim).child(row.new === undefined ? "" : String(row.new)))
       .child(div().w(M.SIGN).flex_none().text_color(row.kind === "+" ? t.ansi2 : row.kind === "-" ? t.ansi1 : t.dim).child(row.kind === "-" ? "−" : row.kind.trim()))
-      .child(this.code(row, d.colors.get(i), t, syntax));
+      .child(this.code(row, d, i, t, syntax));
   }
 
   // The code, moved by the sideways scroll; the numbers stay.
-  code(row, runs, t, syntax) {
+  code(row, d, i, t, syntax) {
     const plain = row.kind ? t.foreground : t.dim;
+    let parts = d.pieces.get(i);
+    if (!parts) d.pieces.set(i, parts = pieces(row.text));
     return div().flex_1().min_w(0).h_full().relative().overflow_hidden()
       .child(h_flex().absolute().top_0().bottom_0().left(-Math.round(this.scroll.left)).items_center().whitespace_nowrap()
-        .children(segments(row.text, runs).map(([text, key]) => div().flex_none().text_color(key ? syntax[key] ?? plain : plain).child(unligature(text)))));
+        .children(parts.map(([text, key]) => div().flex_none().text_color(key ? syntax[key] ?? plain : plain).child(text))));
   }
 
   commentRow({ c, outdated, lines }, t) {

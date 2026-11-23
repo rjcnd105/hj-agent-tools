@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import v8 from "node:v8";
+import vm from "node:vm";
 
 // The mod imports nothing from herdr in model.js, so it loads as a plain module.
 const source = await readFile(new URL("../../herdr/hj-review/model.js", import.meta.url));
-const { FEEDBACK_CHARS, unligature, cells, wrap, diffRows, parseDiff, addedRows, parseFiles, painter, segments, spans, range, anchor, anchorRow, moved, place, feedback } =
+const { FEEDBACK_CHARS, unligature, cells, wrap, diffRows, parseDiff, addedRows, parseFiles, painter, segments, pieces, spans, range, anchor, anchorRow, moved, place, feedback } =
   await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const DIFF = [
@@ -123,6 +125,29 @@ test("the painter parses each hunk's new and old side as texts of their own", ()
   assert.deepEqual(rows.map((_, i) => p.needs(i)), rows.map(() => false));
 });
 
+test("painter releases old-side parser once its last removed line finishes even with trailing context", async () => {
+  v8.setFlagsFromString("--expose_gc");
+  const gc = vm.runInNewContext("gc");
+  const rows = diffRows(["@@ -1,23 +1,3 @@", ...Array.from({ length: 20 }, (_, i) => `-old${i}`), " ctx0", " ctx1", " ctx2"]);
+  const p = painter(rows), colors = new Map();
+  let oldRef;
+  p.step(1, 20, (text) => {
+    const parse = stepper()(text);
+    const wrapped = (to) => parse(to);
+    oldRef = new WeakRef(wrapped);
+    return wrapped;
+  }, colors);
+  // Every removed line (1..20) is done; trailing context rows belong to the new side.
+  for (let i = 1; i <= 20; i++) assert.equal(p.needs(i), false);
+  // Yield a turn so WeakRef is eligible for collection while `p` stays alive.
+  await new Promise((r) => setTimeout(r, 0));
+  gc();
+  assert.equal(oldRef.deref(), undefined, "old-side parser should be released after its last removed row");
+  // Paint the new side (context rows 21..23); no row should need painting afterwards.
+  p.step(21, 20, stepper(), colors);
+  assert.deepEqual(rows.map((_, i) => p.needs(i)), rows.map(() => false));
+});
+
 test("a block comment colours each of its lines, however the steps fall", () => {
   const block = diffRows(["@@ -1,4 +1,4 @@", "+a /* one", "+two", "+three */ b", "+" + "x".repeat(20)]);
   for (const n of [1, 2, 20]) {
@@ -153,6 +178,66 @@ test("Lezer colours a text step by step as it does in one parse", async () => {
   assert.deepEqual(whole[2][0], [" * it's a doc line", "comment"]);
 });
 
+test("fallback highlighter covers non-Lezer languages and filenames consistently across step sizes", async () => {
+  const { spanner, languageOf, MAX_FALLBACK_CHARS } = await import("../../herdr/hj-review/syntax.js");
+  const { languages, tokenize } = await import("../../herdr/hj-review/lezer/fallback.js");
+  // Lezer stays primary; non-Lezer extensions and extensionless names route to TanStack fallback.
+  assert.equal(languageOf("src/app.ts")?.module, "javascript");
+  assert.equal(languageOf("src/lib.rs")?.module, "rust");
+  assert.equal(languageOf("scripts/deploy.sh")?.fallback, "shell");
+  assert.equal(languageOf("Cargo.toml")?.fallback, "toml");
+  assert.equal(languageOf("infra/Dockerfile")?.fallback, "dockerfile");
+  assert.equal(languageOf("infra/Dockerfile.prod")?.fallback, "dockerfile");
+  assert.equal(languageOf("infra\\Dockerfile")?.fallback, "dockerfile");
+  assert.equal(languageOf("Dockerfile.dockerignore"), null);
+  assert.equal(languageOf("Dockerfile.prod.dockerignore"), null);
+  assert.equal(languageOf("justfile")?.fallback, "makefile");
+  assert.equal(languageOf("config/.env.local")?.fallback, "env");
+  assert.equal(languageOf("~/.zshrc")?.fallback, "shell");
+  assert.equal(languageOf("CMakeLists.txt")?.fallback, "cmake");
+  // Object.prototype properties must never resolve as languages.
+  assert.equal(languageOf("constructor"), null);
+  assert.equal(languageOf("__proto__"), null);
+  assert.equal(languageOf("foo.toString"), null);
+  assert.equal(languageOf("README.unknown"), null);
+
+  // Multiline shell heredoc + comment + variables produce identical pieces regardless of step size.
+  const lines = ["# deploy", "export APP=\"demo\"", "cat <<EOF", "line one", "line two", "EOF", "if [ -n \"$APP\" ]; then echo $APP; fi"];
+  const rows = diffRows(["@@ -0,0 +1 @@", ...lines.map((l) => `+${l}`)]);
+  const start = await spanner(languageOf("deploy.sh"));
+  const color = (n) => {
+    const p = painter(rows), colors = new Map();
+    for (let i = 0; i < rows.length; i++) while (p.needs(i)) p.step(i, n, start, colors);
+    return rows.map((_, i) => segments(rows[i].text, colors.get(i)));
+  };
+  const whole = color(1000);
+  assert.deepEqual(color(20), whole);
+  assert.deepEqual(color(1), whole);
+  assert.deepEqual(whole[1], [["# deploy", "comment"]]);
+  assert.deepEqual(whole[4], [["line one", "string"]]);
+  assert.deepEqual(whole[5], [["line two", "string"]]);
+
+  // Embedded languages work inside EJS (js) and PHP (html) while top-level html/js still use Lezer.
+  assert.equal(languageOf("index.html")?.module, "html");
+  assert.equal(languageOf("app.js")?.module, "javascript");
+  assert.ok(tokenize("<% if (ok) { %>", "ejs").some((r) => r.className === "keyword"));
+  const phpTokens = tokenize("<h1>Hi</h1><?php echo 1; ?>", "php");
+  assert.ok(phpTokens.some((r) => r.className === "tag"));
+  assert.ok(phpTokens.some((r) => r.className === "keyword"));
+
+  // Inputs past MAX_FALLBACK_CHARS skip fallback tokenization cleanly instead of blocking a frame.
+  const big = "SELECT 1;\n".repeat(Math.ceil((MAX_FALLBACK_CHARS + 100) / 10));
+  const sqlStart = await spanner(languageOf("big.sql"));
+  assert.deepEqual(sqlStart(big)(big.length), []);
+
+  // Smoke-test every bundled fallback language so lazy regex compilation cannot throw at runtime.
+  assert.ok(languages.length >= 50);
+  for (const lang of languages) {
+    const ranges = tokenize("# note\n// note\nfoo = \"bar\" 123 true\n", lang);
+    assert.ok(Array.isArray(ranges), lang);
+  }
+});
+
 test("unligature splits every run of ASCII punctuation, and only that", () => {
   const text = "return { ...parsed, size: parsed.size ?? 0 }; // a => b != c === d <= e -> f && g || h :: i /* x */ www 0xFF";
   const z = "\u200c";
@@ -175,6 +260,9 @@ test("segments cut a row at its runs, join one colour, and end no piece in a spa
   assert.deepEqual(segments("a b", [[0, 1, "k"], [2, 3, "k"]]), [["a b", "k"]]);
   assert.deepEqual(segments("x  ", []), [["x", null]]);
   assert.deepEqual(segments("   ", []), []);
+  // pieces() bakes unligature into each merged segment so render() does no per-frame string work.
+  assert.deepEqual(pieces("a => b != 1", [[10, 11, "number"]]), [["a =\u200c> b !\u200c=", null], [" 1", "number"]]);
+  assert.deepEqual(pieces("a === b"), [["a =\u200c=\u200c= b", null]]);
 });
 
 test("wrap breaks a comment's lines at the last space that fits, or mid-word", () => {

@@ -1,7 +1,7 @@
 {
   "name": "hj-review-lezer",
   "private": true,
-  "description": "Builds the Lezer parsers hj-review highlights diffs with: `just herdr-lezer`.",
+  "description": "Builds the Lezer parsers and TanStack Highlight fallback bundle hj-review highlights diffs with: `just herdr-lezer`.",
   "type": "module",
   "devDependencies": {
     "@lezer/common": "^1.5.6",
@@ -20,6 +20,7 @@
     "@lezer/sass": "^1.1.0",
     "@lezer/xml": "^1.0.6",
     "@lezer/yaml": "^1.0.4",
+    "@tanstack/highlight": "^1.2.12",
     "esbuild": "^0.28.2"
   }
 }
