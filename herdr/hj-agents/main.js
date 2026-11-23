@@ -11,7 +11,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, checking, exec, home, readTextFile, watchFolder } from "herdr";
-import { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl } from "./model.js";
+import { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl, worktreeName } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
 import { shownIn } from "./shown.js";
@@ -179,6 +179,17 @@ function treeLines(t, lines, height) {
     .when(line === "└", (el) => el.child(div().h(height / 2).border_l(1.5).border_b(1.5).rounded_bl(6).border_color(t.input))));
 }
 
+// A terminal's folder → the linked worktree it is in (null: the repository's own checkout, no
+// repository, or not answered yet). Asked once for as long as a row is in that folder.
+const worktrees = new Map();
+
+// The worktree a row's terminal is in: a small branch mark and the worktree's name, fainter than dim.
+function worktreeChip(t, id, name) {
+  return h_flex().id(id).min_w(0).gap(2).items_center().text_color(t.dim).opacity(0.55).tooltip(`Worktree: ${name}`)
+    .child(svg("mods/workspace-chrome/git-branch.svg").size(10).flex_none())
+    .child(div().min_w(0).truncate().text_size(10.5).child(name));
+}
+
 function focusTerminal(terminal) {
   const inPane = panes().some((p) => p.terminal === terminal);
   run(inPane ? "pane.focus" : "terminal.peek", { terminal });
@@ -262,6 +273,22 @@ export default class Agents extends View {
       }
       if (latestTerminalKey !== scannedTerminalKey) await pollServers(cx);
     });
+  }
+
+  // Asks git about the folders it hasn't yet; a row draws without a worktree until the answer comes.
+  resolveWorktrees(cx, cwds) {
+    for (const cwd of worktrees.keys()) if (!cwds.has(cwd)) worktrees.delete(cwd);
+    for (const cwd of cwds) {
+      if (worktrees.has(cwd)) continue;
+      worktrees.set(cwd, null);
+      cx.spawn(async (cx) => {
+        const r = await exec("git", ["--no-optional-locks", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"], { cwd, timeout: 5000 }).catch(() => null);
+        const name = r?.code === 0 ? worktreeName(r.stdout) : null;
+        if (!name || !worktrees.has(cwd)) return;
+        worktrees.set(cwd, name);
+        cx.notify();
+      });
+    }
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -428,6 +455,7 @@ export default class Agents extends View {
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
     const on = k.address === shown;
+    const wt = worktrees.get(k.cwd);
     return h_flex()
       .id(`sub-${k.address}`)
       .pl(39)
@@ -443,7 +471,10 @@ export default class Agents extends View {
       .on_click(() => focusTerminal(k.address))
       .children(treeLines(t, s.lines, 26))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .child(div().truncate().text_color(on ? t.foreground : t.muted)
+        .when(!wt, (el) => el.flex_1()).when(Boolean(wt), (el) => el.flex_none().max_w(150))
+        .child(k.name || k.template || k.program?.name || k.address))
+      .when(Boolean(wt), (el) => el.child(worktreeChip(t, `sub-wt-${k.address}`, wt).flex_1().ml(4)))
       .child(this.status(t, { status: st }, compact));
   }
 
@@ -481,6 +512,9 @@ export default class Agents extends View {
     const subsByAgent = new Map([...trees].map(([addr, rows]) => [addr, rows.filter((row) => row.kind === "sub")]));
     const nested = new Set(collapsed ? [] : [...subsByAgent.values()].flatMap((subs) => subs.map((s) => s.t.address)));
     list = list.filter((a) => a.pinned || !nested.has(a.address));
+    // Another machine's folders aren't here to ask about.
+    const cwdOf = new Map(all.filter((x) => x.cwd && !x.address.includes("/")).map((x) => [x.address, x.cwd]));
+    if (!checking() && !collapsed) this.resolveWorktrees(cx, new Set([...list.map((a) => a.address), ...nested].map((addr) => cwdOf.get(addr)).filter(Boolean)));
     const tabCounts = new Map();
     for (const a of list) tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
     const byPriority = sort.id === "priority";
@@ -553,6 +587,7 @@ export default class Agents extends View {
     const row = (a, i, subs, hasChildren) => {
       const pic = icon(a.program, 16, t.foreground);
       const more = detail.get(a.address);
+      const wt = worktrees.get(cwdOf.get(a.address));
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
       if (collapsed) {
@@ -617,6 +652,7 @@ export default class Agents extends View {
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
+          .when(Boolean(wt), el => el.child(worktreeChip(t, `ag-wt-${a.address}`, wt).max_w(120)))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(hasChildren, el => el.child(fold(a, subs)))

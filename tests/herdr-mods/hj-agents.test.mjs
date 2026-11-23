@@ -4,7 +4,7 @@ import test from "node:test";
 
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
 const source = await readFile(new URL("../../herdr/hj-agents/model.js", import.meta.url));
-const { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl } =
+const { buildAgentRows, buildShellServerGroups, countServerRows, openUrlCommand, shortUrl, worktreeName } =
   await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const terminal = (address, fields = {}) => ({ address, state: "live", ...fields });
@@ -144,4 +144,18 @@ test("platform commands keep the full URL, including scheme and port", () => {
   assert.deepEqual(openUrlCommand("linux", url), { cmd: "xdg-open", args: [url] });
   assert.deepEqual(openUrlCommand("windows", url), { cmd: "cmd", args: ["/c", "start", "", url] });
   assert.equal(shortUrl(` ${url} `), url);
+});
+
+test("a linked worktree is named by its folder without the repository's name", () => {
+  const parse = (...lines) => worktreeName(`${lines.join("\n")}\n`);
+  // A linked worktree's git dir is under the repository's `worktrees`.
+  assert.equal(parse("/w/repo/.git/worktrees/repo.feature-x", "/w/repo/.git", "/w/repo.feature-x"), "feature-x");
+  assert.equal(parse("/w/repo/.git/worktrees/agent-a1", "/w/repo/.git", "/w/repo/.claude/worktrees/agent-a1"), "agent-a1");
+  // "repository" only starts with "repo": nothing to drop.
+  assert.equal(parse("/w/repo/.git/worktrees/repository", "/w/repo/.git", "/w/repository"), "repository");
+  assert.equal(parse("/w/repo.git/worktrees/main", "/w/repo.git", "/w/repo-main"), "main");
+  // The repository's own checkout, a submodule, and no repository at all.
+  assert.equal(parse("/w/repo/.git", "/w/repo/.git", "/w/repo"), null);
+  assert.equal(parse("/w/repo/.git/modules/lib", "/w/repo/.git/modules/lib", "/w/repo/lib"), null);
+  assert.equal(worktreeName(""), null);
 });

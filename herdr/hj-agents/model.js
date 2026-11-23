@@ -32,6 +32,20 @@ export function buildAgentRows(agentAddr, allTerminals, serversByTerminal, expan
   return rows;
 }
 
+/** `git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel` → the name of the
+ *  linked worktree, or null in the repository's own checkout. The name is the folder's without the
+ *  repository's before it: worktrunk and Claude put "repo.feature-x" next to "repo". */
+export function worktreeName(stdout) {
+  const [gitDir, commonDir, top] = (stdout ?? "").split(/\r?\n/);
+  if (!gitDir || !commonDir || !top || gitDir === commonDir) return null;
+  const base = (path) => path.replace(/\/+$/, "").split("/").pop();
+  const folder = base(top);
+  // A bare repository's common dir is the repository itself ("repo.git").
+  const repo = /\/\.git\/*$/.test(commonDir) ? base(commonDir.replace(/\/\.git\/*$/, "")) : base(commonDir).replace(/\.git$/, "");
+  const rest = repo && folder.startsWith(repo) ? folder.slice(repo.length) : "";
+  return /^[._-]./.test(rest) ? rest.slice(1) : folder;
+}
+
 function directory(path) {
   if (!path) return "";
   const win = /^[A-Za-z]:[\\/]|^\\\\/.test(path);
