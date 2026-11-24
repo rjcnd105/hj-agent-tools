@@ -50,11 +50,30 @@ export function availableParents(activeSpace, allPanes, allTerminals) {
   return live.filter(terminal => terminal.program?.agent && !terminal.program.shell && inSpace(terminal));
 }
 
-export function pickDefaultParent(activeSpace, allPanes, allTerminals, focusedInfo) {
+export function pickFocusedParent(activeSpace, allPanes, allTerminals, focusedInfo) {
   const candidates = availableParents(activeSpace, allPanes, allTerminals);
   const localFocus = !focusedInfo?.space || focusedInfo.space === activeSpace?.id;
-  return (localFocus && candidates.find(terminal => terminal.address === focusedInfo?.terminal)?.address) ||
-    candidates[0]?.address || null;
+  if (localFocus && focusedInfo) {
+    const pane = focusedInfo.pane ? allPanes.find(p => p.pane === focusedInfo.pane) : null;
+    for (const addr of [focusedInfo.shown, focusedInfo.terminal, focusedInfo.agent, pane?.terminal]) {
+      if (addr && candidates.some(terminal => terminal.address === addr)) return addr;
+    }
+  }
+  const activeTab = activeSpace?.tabs?.find(tab => tab.active);
+  if (activeTab) {
+    const activePane = allPanes.find(p => p.tab === activeTab.id && p.focused);
+    if (activePane?.terminal && candidates.some(terminal => terminal.address === activePane.terminal)) {
+      return activePane.terminal;
+    }
+  }
+  return null;
+}
+
+export function pickDefaultParent(activeSpace, allPanes, allTerminals, focusedInfo, fallback = null) {
+  const candidates = availableParents(activeSpace, allPanes, allTerminals);
+  return pickFocusedParent(activeSpace, allPanes, allTerminals, focusedInfo)
+    || (fallback && candidates.find(terminal => terminal.address === fallback)?.address)
+    || candidates[0]?.address || null;
 }
 
 export function resolveSpaceCwd(space, allPanes, focusedInfo) {
@@ -74,11 +93,15 @@ export function sortPresets(presets, lastUsedMap = {}) {
     || a.name.localeCompare(b.name));
 }
 
-export function buildLaunchArgs({ presetId, cwd, parent, selectedRoles, task, withServers, runId, notifyParent }) {
+export function buildLaunchArgs({ presetId, cwd, parent, selectedRoles, roleCounts, task, withServers, runId, notifyParent }) {
+  const roleTokens = (selectedRoles ?? []).map(id => {
+    const count = Number(roleCounts?.[id] ?? 1);
+    return count > 1 ? `${id}=${count}` : id;
+  });
   return [
     "launch", presetId, "--json", "--cwd", cwd,
     ...(runId ? ["--run", runId] : parent ? ["--parent", parent] : ["--no-parent"]),
-    ...(selectedRoles?.length ? ["--roles", selectedRoles.join(",")] : []),
+    ...(roleTokens.length ? ["--roles", roleTokens.join(",")] : []),
     ...(task ? [`--task=${task}`] : []), ...(withServers ? ["--with-servers"] : []),
     ...(notifyParent ? ["--notify-parent"] : []),
   ];
@@ -141,6 +164,142 @@ export function preparePresetForEdit(globalPreset, routes = {}) {
     }),
   };
   return { doc, autoCommands };
+}
+
+export function formatCommandInput(argv) {
+  if (!Array.isArray(argv)) return "";
+  if (argv.some(part => /[\r\n\t]/.test(String(part)))) return JSON.stringify(argv);
+  return argv.map(part => {
+    const str = String(part);
+    if (!str || /[\s"'\\]/.test(str)) return JSON.stringify(str);
+    return str;
+  }).join(" ");
+}
+
+export function parseCommandInput(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch { /* Fall through to token parsing. */ }
+  }
+  const tokens = [];
+  let cur = "", quote = null, escaped = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escaped) {
+      if (quote === '"') {
+        if (ch === "n") cur += "\n";
+        else if (ch === "r") cur += "\r";
+        else if (ch === "t") cur += "\t";
+        else cur += ch;
+      } else {
+        cur += ch;
+      }
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (cur) { tokens.push(cur); cur = ""; }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+export function splitCsv(text) {
+  return String(text ?? "").split(",").map(item => item.trim()).filter(Boolean);
+}
+
+export function splitLines(text) {
+  return String(text ?? "").split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+}
+
+export function presetToFormDraft(preset, routes = {}) {
+  const routeNames = Object.keys(routes).sort();
+  const fallbackRoute = routeNames[0] ?? "";
+  return {
+    schemaVersion: 1,
+    id: preset?.id ?? "new-team",
+    name: preset?.name ?? "New Team",
+    description: preset?.description ?? "",
+    servers: (preset?.servers ?? []).map(srv => ({
+      id: srv?.id ?? "web",
+      commandText: formatCommandInput(srv?.command ?? []),
+      cwd: srv?.cwd ?? ".",
+    })),
+    roles: (preset?.roles ?? []).map(role => {
+      const hasCommand = Array.isArray(role?.command) && !role?.route;
+      return {
+        id: role?.id ?? "role",
+        title: role?.title ?? "",
+        mode: hasCommand ? "command" : "route",
+        route: role?.route ?? fallbackRoute,
+        commandText: formatCommandInput(role?.command ?? (role?.route && routes?.[role.route]?.command ? routes[role.route].command : [])),
+        default: role?.default !== false,
+        readOnly: Boolean(role?.readOnly),
+        scalable: Boolean(role?.scalable),
+        worktree: Boolean(role?.worktree),
+        ownServer: Boolean(role?.ownServer),
+        skillsText: (role?.skills ?? []).join(", "),
+        toolsText: (role?.tools ?? []).join("\n"),
+        owns: [...(role?.owns ?? [])],
+        talksTo: [...(role?.talksTo ?? [])],
+        checkpoints: [...(role?.checkpoints ?? [])],
+        instructions: role?.instructions ?? "",
+      };
+    }),
+  };
+}
+
+export function formDraftToPreset(draft) {
+  const servers = (draft?.servers ?? []).map(srv => ({
+    id: String(srv.id ?? "").trim(),
+    command: parseCommandInput(srv.commandText),
+    ...(String(srv.cwd ?? "").trim() && String(srv.cwd).trim() !== "." ? { cwd: String(srv.cwd).trim() } : {}),
+  }));
+  const roles = (draft?.roles ?? []).map(role => {
+    const id = String(role.id ?? "").trim();
+    const out = {
+      id,
+      title: String(role.title ?? "").trim(),
+      ...(role.mode === "command"
+        ? { command: parseCommandInput(role.commandText) }
+        : { route: String(role.route ?? "").trim() }),
+      default: Boolean(role.default),
+      ...(role.readOnly ? { readOnly: true } : {}),
+      ...(role.scalable ? { scalable: true } : {}),
+      ...(role.worktree ? { worktree: true } : {}),
+      ...(role.ownServer ? { ownServer: true } : {}),
+    };
+    const skills = splitCsv(role.skillsText);
+    const tools = splitLines(role.toolsText);
+    if (skills.length) out.skills = skills;
+    if (tools.length) out.tools = tools;
+    if (role.owns?.length) out.owns = [...role.owns];
+    if (role.talksTo?.length) out.talksTo = [...role.talksTo];
+    if (role.checkpoints?.length) out.checkpoints = [...role.checkpoints];
+    out.instructions = String(role.instructions ?? "").trim();
+    return out;
+  });
+  return {
+    schemaVersion: 1,
+    id: String(draft?.id ?? "").trim(),
+    name: String(draft?.name ?? "").trim(),
+    ...(String(draft?.description ?? "").trim() ? { description: String(draft.description).trim() } : {}),
+    ...(servers.length ? { servers } : {}),
+    roles,
+  };
 }
 
 export function normalizePresetFromEdit(rawText, routes = {}, autoCommands = {}) {

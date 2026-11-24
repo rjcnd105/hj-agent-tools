@@ -69,6 +69,9 @@ Design principle:
     - `command`: non-empty array of non-empty strings (literal escape hatch).
   - `default`: boolean (default `true`).
   - `readOnly`: boolean (default `false`).
+  - `scalable`: boolean (default `false`). When `true`, launch accepts `--roles <id>=<N>` (`1..10`) to fan out `<id>-1..N` instances.
+  - `worktree`: boolean (default `false`). When `true`, launch creates an isolated `jj workspace` or `git worktree` per launched role instance under `~/.local/state/hc-team/runs/<runId>/worktrees/<instanceId>`.
+  - `ownServer`: boolean (default `false`). When `true` and `--with-servers` is active, launch starts `preset.servers` inside each role instance's `cwd` with a distinct allocated free port (`PORT`, `HC_TEAM_PORT`, and `{port}` substitution).
   - `skills`: optional array of non-empty strings (default `[]`). (Launch resolves installed `SKILL.md` paths when found.)
   - `tools`: optional array of non-empty strings (default `[]`). (Preferred CLIs, scripts, or playbooks injected into the brief to prevent trial-and-error.)
   - `owns`: optional array of non-empty strings (default `[]`). (Brief scope hints.)

@@ -5,8 +5,8 @@ import test from "node:test";
 // Load the mod's ESM as-is on Node 20, without a package.json in the mod folder.
 const source = await readFile(new URL("../../herdr/hj-team/model.js", import.meta.url));
 const {
-  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  normalizePresetFromEdit, pickDefaultParent, preparePresetForEdit, resolveSpaceCwd, sortPresets,
+  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatCommandInput, formatValidationError, formDraftToPreset, groupRuns, newPresetSkeleton,
+  normalizePresetFromEdit, parseCommandInput, pickDefaultParent, pickFocusedParent, preparePresetForEdit, presetToFormDraft, resolveSpaceCwd, sortPresets,
 } = await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
 const terminal = (address, fields = {}) => ({ address, state: "live", ...fields });
@@ -53,13 +53,21 @@ const allTerminals = [fish, zsh, agent("t11"), agent("t12"), agent("t13", { stat
   agent("t16", { labels: { "herdr.space": "web" } }), agent("t17", { parent: "t18" }), agent("t18", { parent: "t17" })];
 
 test("defaults to the focused agent in the active space, otherwise the first eligible agent", () => {
-  const pick = focus => pickDefaultParent(local, allPanes, allTerminals, focus);
+  const pick = (focus, fallback) => pickDefaultParent(local, allPanes, allTerminals, focus, fallback);
   assert.equal(pick({ space: "web", terminal: "t12" }), "t12");
   assert.equal(pick({ space: "web", terminal: "t15" }), "t15");
+  assert.equal(pick({ space: "web", shown: "t15", terminal: "t11" }), "t15");
+  assert.equal(pick({ space: "web", agent: "t12", terminal: null }), "t12");
+  assert.equal(pick({ space: "web", pane: "p-t12", terminal: null }), "t12");
+  assert.equal(pick({ space: "web", terminal: null }, "t12"), "t12");
   assert.equal(pick({ space: "web", terminal: "tfish" }), "t11");
   assert.equal(pick({ space: "web", terminal: "t14" }), "t11");
   assert.equal(pick({ space: "vps/web", terminal: "vps/t11" }), "t11");
   assert.equal(pick(null), "t11");
+  const activeSpace = { ...local, tabs: [{ id: "main" }, { id: "qa", active: true }] };
+  const focusedPanes = allPanes.map(p => p.terminal === "t12" ? { ...p, focused: true } : p);
+  assert.equal(pickFocusedParent(activeSpace, focusedPanes, allTerminals, { space: "web", terminal: null }), "t12");
+  assert.equal(pickFocusedParent(local, allPanes, allTerminals, { space: "web", terminal: "tfish" }), null);
 });
 
 test("shell-only and absent spaces yield no parent even if another space has agents", () => {
@@ -118,6 +126,8 @@ test("builds exact launch argv with explicit parent choice and no shell escaping
     ["launch", "web-squad", "--json", "--cwd", "/work/web", "--no-parent"]);
   assert.deepEqual(buildLaunchArgs({ presetId: "web-squad", cwd: "/work/web", runId: "abc123", selectedRoles: ["qa"], notifyParent: true }),
     ["launch", "web-squad", "--json", "--cwd", "/work/web", "--run", "abc123", "--roles", "qa", "--notify-parent"]);
+  assert.deepEqual(buildLaunchArgs({ presetId: "web-squad", cwd: "/work/web", parent: "t11", selectedRoles: ["worker", "qa"], roleCounts: { worker: 5, qa: 1 }, withServers: true }),
+    ["launch", "web-squad", "--json", "--cwd", "/work/web", "--parent", "t11", "--roles", "worker=5,qa", "--with-servers"]);
 });
 
 test("describes mixed harness commands without treating unknown executables as a known agent", () => {
@@ -248,4 +258,61 @@ test("expands route commands for Edit JSON and normalizes untouched vs customize
   const unchanged = JSON.parse(normalizePresetFromEdit(JSON.stringify(doc), routes, autoCommands));
   assert.deepEqual(unchanged.roles[0], globalPreset.roles[0]);
   assert.equal(normalizePresetFromEdit("{invalid", routes, autoCommands), "{invalid");
+});
+
+test("round-trips form draft with boolean options, servers, multiline commands, and comma tools", () => {
+  assert.deepEqual(parseCommandInput(`codex -m gpt-6.2-astra -c 'model_reasoning_effort="xhigh"'`),
+    ["codex", "-m", "gpt-6.2-astra", "-c", 'model_reasoning_effort="xhigh"']);
+  assert.deepEqual(parseCommandInput('["bun", "dev", "--port", "{port}"]'), ["bun", "dev", "--port", "{port}"]);
+  assert.equal(formatCommandInput(["bun", "dev", "--port", "{port}"]), "bun dev --port {port}");
+  const multilineCmd = ["sh", "-c", "echo first\necho second"];
+  assert.deepEqual(parseCommandInput(formatCommandInput(multilineCmd)), multilineCmd);
+
+  const routes = { implement: { command: ["pi", "--model", "gpt-6.2-sol"] } };
+  const input = {
+    schemaVersion: 1,
+    id: "parallel-squad",
+    name: "Parallel Squad",
+    description: "Run isolated workers",
+    servers: [{ id: "web", command: ["bun", "dev", "--port", "{port}"], cwd: "apps/web" }],
+    roles: [
+      {
+        id: "worker", title: "Worker", route: "implement",
+        default: true, readOnly: false, scalable: true, worktree: true, ownServer: true,
+        skills: ["ego-browser"], tools: ["rg --glob=*.{js,ts}", "simple-pr"], owns: ["src/**"], talksTo: ["qa"], checkpoints: ["tests pass"],
+        instructions: "Build in isolated worktree.",
+      },
+      {
+        id: "qa", title: "QA", command: ["agy", "--model", "gemini-4-neon-medium"],
+        default: false, readOnly: true,
+        instructions: "Verify.",
+      },
+    ],
+  };
+  const draft = presetToFormDraft(input, routes);
+  assert.equal(draft.roles[0].scalable, true);
+  assert.equal(draft.roles[0].worktree, true);
+  assert.equal(draft.roles[0].ownServer, true);
+  assert.equal(draft.roles[1].mode, "command");
+  const rebuilt = formDraftToPreset(draft);
+  assert.deepEqual(rebuilt, {
+    schemaVersion: 1,
+    id: "parallel-squad",
+    name: "Parallel Squad",
+    description: "Run isolated workers",
+    servers: [{ id: "web", command: ["bun", "dev", "--port", "{port}"], cwd: "apps/web" }],
+    roles: [
+      {
+        id: "worker", title: "Worker", route: "implement",
+        default: true, scalable: true, worktree: true, ownServer: true,
+        skills: ["ego-browser"], tools: ["rg --glob=*.{js,ts}", "simple-pr"], owns: ["src/**"], talksTo: ["qa"], checkpoints: ["tests pass"],
+        instructions: "Build in isolated worktree.",
+      },
+      {
+        id: "qa", title: "QA", command: ["agy", "--model", "gemini-4-neon-medium"],
+        default: false, readOnly: true,
+        instructions: "Verify.",
+      },
+    ],
+  });
 });

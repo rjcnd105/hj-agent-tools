@@ -723,6 +723,91 @@ test('brief injects role tools, resolved SKILL.md paths, global _tools.md, and o
   assert.ok(brief.includes(`${helperScript} (project helper script)`));
 });
 
+test('scalable roles fan out into isolated git worktrees with per-role distinct-port servers and send routing', t => {
+  const box = sandbox(t);
+  execFileSync('git', ['init', '-q', box.cwd]);
+  execFileSync('git', ['-C', box.cwd, 'config', 'user.email', 'test@example.com']);
+  execFileSync('git', ['-C', box.cwd, 'config', 'user.name', 'Test']);
+  writeFileSync(join(box.cwd, 'README.md'), 'init\n');
+  execFileSync('git', ['-C', box.cwd, 'add', '.']);
+  execFileSync('git', ['-C', box.cwd, 'commit', '-q', '-m', 'init']);
+  box.save(preset({
+    servers: [{ id: 'web', command: ['node', 'srv.js', '--port', '{port}'], cwd: '.' }],
+    roles: [
+      role('worker', { scalable: true, worktree: true, ownServer: true, talksTo: ['lead'] }),
+      role('lead', { default: false, talksTo: ['worker'] }),
+    ],
+  }));
+  mockHc(box);
+  // Reject count > 1 on non-scalable role.
+  assert.equal(box.command(['launch', 'example', '--roles', 'lead=2', '--dry-run', '--json']).status, 1);
+
+  const launched = box.json(['launch', 'example', '--roles', 'worker=3', '--with-servers']);
+  assert.equal(launched.roles.length, 3);
+  assert.deepEqual(launched.roles.map(r => r.id), ['worker-1', 'worker-2', 'worker-3']);
+  assert.equal(launched.servers.length, 3);
+  assert.deepEqual(launched.servers.map(s => s.forRole), ['worker-1', 'worker-2', 'worker-3']);
+  const ports = launched.servers.map(s => s.port);
+  assert.equal(new Set(ports).size, 3);
+  assert.ok(ports.every(port => port >= 20000 && port < 49152));
+  for (let i = 0; i < 3; i++) {
+    const wt = launched.roles[i].worktree;
+    assert.ok(wt && readFileSync(join(wt, 'README.md'), 'utf8') === 'init\n');
+    const brief = readFileSync(launched.roles[i].briefPath, 'utf8');
+    assert.ok(brief.includes(`Worktree: ${wt}`));
+    assert.ok(brief.includes(`PORT=${ports[i]}`));
+  }
+  const runCalls = readLog(box.log).filter(row => row.args[0] === 'run').map(row => row.args);
+  const serverRuns = runCalls.filter(args => args.includes('--label') && args.some(a => a.startsWith('hc.team.server=')));
+  assert.equal(serverRuns.length, 3);
+  for (let i = 0; i < 3; i++) {
+    const srvArgs = serverRuns.find(args => args.includes(`hc.team.server=web-worker-${i + 1}`));
+    assert.ok(srvArgs);
+    assert.ok(srvArgs.includes(`PORT=${ports[i]}`));
+    assert.ok(srvArgs.includes(String(ports[i])));
+  }
+
+  // Re-launching a single dead scaled instance (--run <id> --roles worker-2) targets only worker-2
+  // and reuses its live server without inventing a new port.
+  const runId = launched.runId;
+  mockHc(box, {
+    terminals: [
+      { address: 'tw1', state: 'live', labels: launchLabels(runId, 'worker-1', box.cwd) },
+      { address: 'tw3', state: 'live', labels: launchLabels(runId, 'worker-3', box.cwd) },
+      { address: 'ts2', state: 'live', labels: { 'hc.team.run': runId, 'hc.team.preset': 'example', 'hc.team.server': 'web-worker-2', 'hc.team.cwd': box.cwd } },
+    ],
+  });
+  const relaunched = box.json(['launch', 'example', '--run', runId, '--roles', 'worker-2', '--with-servers']);
+  assert.deepEqual(relaunched.roles.map(r => r.id), ['worker-2']);
+  assert.equal(relaunched.servers[0].address, 'ts2');
+  assert.equal(relaunched.servers[0].port, undefined);
+
+  // Verify hc-team send works between scaled instances (worker-1 -> worker-2).
+  mockHc(box, {
+    terminals: [
+      { address: 'tw1', state: 'live', labels: launchLabels(runId, 'worker-1', box.cwd) },
+      { address: 'tw2', state: 'live', labels: launchLabels(runId, 'worker-2', box.cwd) },
+    ],
+  });
+  const sent = box.json(['send', 'worker-2', 'API ready'], { env: { HC_TERMINAL_ID: 'tw1' } });
+  assert.equal(sent.sent, true);
+  assert.equal(sent.address, 'tw2');
+
+  // Server relative executable resolves against server.cwd, and long server+role names stay unique <= 32 chars.
+  const subDir = join(box.cwd, 'app');
+  mkdirSync(subDir, { recursive: true });
+  box.executable('dev', 'process.exit(0);', subDir);
+  box.save(preset({
+    id: 'long-srv',
+    servers: [{ id: 'development-http', command: ['./dev'], cwd: 'app' }],
+    roles: [role('implementer', { scalable: true, ownServer: true })],
+  }));
+  const longDry = box.json(['launch', 'long-srv', '--roles', 'implementer=2', '--with-servers', '--dry-run']);
+  assert.equal(longDry.servers.length, 2);
+  assert.ok(longDry.servers.every(s => s.reason === null && s.name.length <= 32));
+  assert.equal(new Set(longDry.servers.map(s => s.name)).size, 2);
+});
+
 test('status, send, and stop exclude remote run collisions; plain-shell parent is event-only', t => {
   const box = sandbox(t);
   const runId = 'local1';

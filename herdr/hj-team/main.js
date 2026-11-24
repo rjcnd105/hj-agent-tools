@@ -8,8 +8,8 @@ import {
   setShared, settings, shared, spaces, terminals, theme, watchFolder,
 } from "herdr";
 import {
-  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatValidationError, groupRuns, newPresetSkeleton,
-  normalizePresetFromEdit, pickDefaultParent, preparePresetForEdit, resolveSpaceCwd, sortPresets,
+  availableParents, buildLaunchArgs, buildMachineSetupPrompt, buildModelSyncPrompt, buildOnboardingPrompt, buildPresetEditPrompt, describeRoleCommand, formatCommandInput, formatValidationError, formDraftToPreset, groupRuns, newPresetSkeleton,
+  normalizePresetFromEdit, pickDefaultParent, pickFocusedParent, preparePresetForEdit, presetToFormDraft, resolveSpaceCwd, sortPresets,
 } from "./model.js";
 // Copied from herdr/lib/mod-config.js by `just herdr-mods`.
 import { createModConfig, expandHome, posInt } from "./mod-config.js";
@@ -97,6 +97,17 @@ const caption = (t, label) => div().text_size(11).font_semibold().text_color(t.m
 const chips = () => h_flex().gap(4).flex_wrap();
 const card = t => v_flex().gap(8).p(12).rounded(8).bg(t.chrome).border_1().border_color(t.border);
 const panelBody = id => v_flex().id(id).flex_1().min_h(0).overflow_y_scrollbar().p(12).gap(12);
+const textField = (t, state, h = 28) => Input.new(state).h(h).w_full().min_w(0).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_color(t.foreground).text_size(12);
+
+function checkbox(t, id, label, checked, onClick) {
+  return Button.new(id).flex().flex_none().h(24).px(6).gap(6).items_center().rounded(5)
+    .bg(checked ? t.selected : t.background).border_1().border_color(checked ? t.input : t.border)
+    .cursor_pointer().hover(s => s.bg(checked ? t.selected : t.hover)).on_click(onClick)
+    .child(div().size(13).flex().flex_none().items_center().justify_center().rounded(3)
+      .border_1().border_color(checked ? t.solid : t.input).bg(checked ? t.solid : t.background)
+      .text_size(9.5).font_bold().text_color(t.solid_foreground).child(checked ? "✓" : ""))
+    .child(div().text_size(11.5).text_color(checked ? t.foreground : t.muted).child(label));
+}
 
 function statusMark(t, status) {
   if (status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
@@ -127,10 +138,14 @@ export default class Team extends View {
         }
         let doc = p.dialog === "routes" ? p.doc : p.preset;
         if (p.dialog === "edit") {
+          this.editMode = "form";
+          this.openRoleRouteMenu = null;
+          this.initFormFromPreset(p.preset, p.routes ?? {}, syntax);
           const prepared = p.isNew ? { doc: p.preset, autoCommands: {} } : preparePresetForEdit(p.preset, p.routes ?? {});
           doc = prepared.doc;
           this.autoCommands = prepared.autoCommands;
         }
+        this.editorSyntax = syntax;
         this.editor = EditorState.new({ language: "json", value: JSON.stringify(doc, null, 2),
           font_family: settings().font_family, font_size: 12, syntax });
         if (p.dialog === "routes") {
@@ -160,6 +175,7 @@ export default class Team extends View {
     this.projectRoot = null;
     this.presetErrors = [];
     this.roles = new Set();
+    this.roleCounts = new Map();
     this.lastUsed = {};
     this.selectSignal = this.pendingSelection = shared(SELECT) ?? null;
     this.revision = shared(REVISION);
@@ -221,20 +237,30 @@ export default class Team extends View {
     }
   }
 
-  syncPresets(space, allPanes, cx) {
-    const cwd = resolveSpaceCwd(space, allPanes, focused());
+  syncPresets(space, allPanes, allTerminals, cx) {
+    const focus = focused();
+    const cwd = resolveSpaceCwd(space, allPanes, focus);
     const key = JSON.stringify([space?.id, cwd]);
     let changed = false;
     if (this.context?.key !== key) {
       this.context = { key, cwd };
       this.watchDirectory("overlayWatch", null, cx);
       this.parentOverride = undefined;
+      this.lastFocusedAgent = null;
       this.soloMenu = null;
+      this.launchParentMenu = false;
       this.presets = [];
       this.presetErrors = [];
       this.listError = null;
       this.notice = null;
       changed = true;
+    }
+    const focusedAgent = pickFocusedParent(space, allPanes, allTerminals, focus);
+    if (focusedAgent && focusedAgent !== this.lastFocusedAgent) {
+      this.lastFocusedAgent = focusedAgent;
+      this.parentOverride = undefined;
+      if (this.soloMenu === "parent") this.soloMenu = null;
+      this.launchParentMenu = false;
     }
     const select = shared(SELECT) ?? null, revision = shared(REVISION);
     if (select !== this.selectSignal || (revision?.count !== this.revision?.count && revision?.saved)) {
@@ -247,6 +273,15 @@ export default class Team extends View {
       changed = true;
     }
     if (changed) this.refresh(cx);
+  }
+
+  resolveParent(space, allPanes, allTerminals) {
+    const candidates = availableParents(space, allPanes, allTerminals);
+    const parents = [...candidates.map(terminal => terminal.address), null];
+    const parent = this.parentOverride === undefined
+      ? pickDefaultParent(space, allPanes, allTerminals, focused(), this.lastFocusedAgent)
+      : parents.includes(this.parentOverride) ? this.parentOverride : null;
+    return { candidates, parents, parent };
   }
 
   refresh(cx) {
@@ -268,21 +303,19 @@ export default class Team extends View {
         this.routesError = routes.status === "rejected" ? message(routes.reason) : null;
         this.machineDoc = machine.status === "fulfilled" ? machine.value : null;
         if (list.status === "fulfilled") {
-          const { presets, presetsDir, projectRoot, errors, routesReviewed } = list.value;
+          const { presets, presetsDir, projectRoot, errors } = list.value;
           this.presetsDir = presetsDir ?? this.presetsDir;
           this.projectRoot = projectRoot ?? null;
           if (presetsDir) this.watchDirectory("presetWatch", presetsDir, cx);
           if (context.cwd && projectRoot) this.watchDirectory("overlayWatch", `${projectRoot.replace(/\/$/, "")}/docs/agent-presets`, cx);
           this.presets = presets;
           this.presetErrors = errors ?? [];
-          this.routesReviewed = routesReviewed ?? this.routesDoc?.reviewed;
           this.listError = null;
           const saved = this.presets.find(item => item.id === this.pendingSelection);
           if (saved) this.pendingSelection = null;
           this.selectPreset(saved ?? this.presets.find(item => item.id === this.selectedId)
             ?? sortPresets(this.presets, this.lastUsed)[0]);
         } else {
-          this.routesReviewed = this.routesDoc?.reviewed;
           this.listError = message(list.reason);
         }
         context.loading = context.reload;
@@ -291,21 +324,170 @@ export default class Team extends View {
     });
   }
 
+  releaseServerRow(row) {
+    row?.id?.release?.();
+    row?.commandText?.release?.();
+    row?.cwd?.release?.();
+  }
+
+  releaseRoleRow(row) {
+    row?.id?.release?.();
+    row?.title?.release?.();
+    row?.commandText?.release?.();
+    row?.skillsText?.release?.();
+    row?.toolsText?.release?.();
+    row?.instructions?.release?.();
+  }
+
+  releaseFormStates() {
+    this.formMeta?.id?.release?.();
+    this.formMeta?.name?.release?.();
+    this.formMeta?.description?.release?.();
+    for (const row of this.formServers ?? []) this.releaseServerRow(row);
+    for (const row of this.formRoles ?? []) this.releaseRoleRow(row);
+  }
+
+  initFormFromPreset(preset, routes, syntax) {
+    this.releaseFormStates();
+    const draft = presetToFormDraft(preset, routes);
+    this.formMeta = {
+      id: InputState.new({ value: draft.id, placeholder: "preset-id" }),
+      name: InputState.new({ value: draft.name, placeholder: "Preset name" }),
+      description: InputState.new({ value: draft.description, placeholder: "When to use this preset" }),
+    };
+    this.formServers = draft.servers.map(srv => this.makeServerFormRow(srv));
+    this.formRoles = draft.roles.map(role => this.makeRoleFormRow(role, syntax));
+    this.expandedRoles = new Set(this.formRoles.length ? [0] : []);
+    this.confirmDelRoleIdx = null;
+  }
+
+  makeServerFormRow(srv = {}) {
+    return {
+      id: InputState.new({ value: srv.id ?? "web", placeholder: "web" }),
+      commandText: InputState.new({ value: srv.commandText ?? "", placeholder: "bun dev --port {port}" }),
+      cwd: InputState.new({ value: srv.cwd ?? ".", placeholder: "." }),
+    };
+  }
+
+  makeRoleFormRow(role = {}, syntax = this.editorSyntax) {
+    return {
+      id: InputState.new({ value: role.id ?? "worker", placeholder: "role-id" }),
+      title: InputState.new({ value: role.title ?? "", placeholder: "Role title" }),
+      mode: role.mode ?? "route",
+      route: role.route ?? "",
+      commandText: InputState.new({ value: role.commandText ?? "", placeholder: "pi --provider openai --model gpt-6.2-sol" }),
+      default: role.default !== false,
+      readOnly: Boolean(role.readOnly),
+      scalable: Boolean(role.scalable),
+      worktree: Boolean(role.worktree),
+      ownServer: Boolean(role.ownServer),
+      skillsText: InputState.new({ value: role.skillsText ?? "", placeholder: "ego-browser, input-replay" }),
+      toolsText: EditorState.new({
+        language: "text",
+        value: role.toolsText ?? "",
+        font_family: settings().font_family,
+        font_size: 11.5,
+        syntax,
+      }),
+      owns: [...(role.owns ?? [])],
+      talksTo: [...(role.talksTo ?? [])],
+      checkpoints: [...(role.checkpoints ?? [])],
+      instructions: EditorState.new({
+        language: "markdown",
+        value: role.instructions ?? "",
+        font_family: settings().font_family,
+        font_size: 11.5,
+        syntax,
+      }),
+    };
+  }
+
+  readFormPreset() {
+    return formDraftToPreset({
+      id: this.formMeta.id.value(),
+      name: this.formMeta.name.value(),
+      description: this.formMeta.description.value(),
+      servers: this.formServers.map(srv => ({
+        id: srv.id.value(),
+        commandText: srv.commandText.value(),
+        cwd: srv.cwd.value(),
+      })),
+      roles: this.formRoles.map(role => ({
+        id: role.id.value(),
+        title: role.title.value(),
+        mode: role.mode,
+        route: role.route,
+        commandText: role.commandText.value(),
+        default: role.default,
+        readOnly: role.readOnly,
+        scalable: role.scalable,
+        worktree: role.worktree,
+        ownServer: role.ownServer,
+        skillsText: role.skillsText.value(),
+        toolsText: role.toolsText.value(),
+        owns: role.owns,
+        talksTo: role.talksTo,
+        checkpoints: role.checkpoints,
+        instructions: role.instructions.value(),
+      })),
+    });
+  }
+
+  switchEditMode(nextMode, p, cx) {
+    if (this.editMode === nextMode) return;
+    this.error = null;
+    this.openRoleRouteMenu = null;
+    this.confirmDelRoleIdx = null;
+    const routes = p.routes ?? {};
+    if (nextMode === "json") {
+      const preset = this.readFormPreset();
+      const prepared = preparePresetForEdit(preset, routes);
+      this.autoCommands = prepared.autoCommands;
+      this.editor?.release?.();
+      this.editor = EditorState.new({
+        language: "json",
+        value: JSON.stringify(prepared.doc, null, 2),
+        font_family: settings().font_family,
+        font_size: 12,
+        syntax: this.editorSyntax,
+      });
+      this.editMode = "json";
+    } else {
+      const normalized = normalizePresetFromEdit(this.editor.value(), routes, this.autoCommands ?? {});
+      let parsed;
+      try { parsed = JSON.parse(normalized); } catch (error) {
+        this.error = `JSON 문법 오류로 Form으로 전환할 수 없습니다: ${message(error)}`;
+        cx.notify();
+        return;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray(parsed.roles)) {
+        this.error = "프리셋 JSON은 객체이며 roles 배열을 포함해야 Form으로 전환할 수 있습니다.";
+        cx.notify();
+        return;
+      }
+      this.initFormFromPreset(parsed, routes, this.editorSyntax);
+      this.editMode = "form";
+    }
+    cx.notify();
+  }
+
   selectPreset(item) {
     // A context change can change a preset's defaults even if its id stays the same.
     const preset = item?.preset;
-    const signature = JSON.stringify([this.context.key, item?.id, preset?.roles.map(role => [role.id, role.default]), Boolean(preset?.servers?.length)]);
+    const signature = JSON.stringify([this.context.key, item?.id, preset?.roles.map(role => [role.id, role.default, role.scalable, role.ownServer]), Boolean(preset?.servers?.length)]);
     if (signature !== this.selectionSignature) {
       this.selectionSignature = signature;
       this.selectedId = item?.id;
       this.roles = new Set(preset?.roles.filter(role => role.default !== false).map(role => role.id));
-      this.withServers = false;
+      this.roleCounts = new Map();
+      const autoServers = Boolean(preset?.servers?.length) && preset.roles.some(role => this.roles.has(role.id) && role.ownServer);
+      this.withServers = autoServers;
     }
   }
 
   edit(preset, isNew, globalSha) {
     openOverlay({
-      mod: "hj-team", kind: "dialog", modal: true, width: 640, height: 560,
+      mod: "hj-team", kind: "dialog", modal: true, width: 720, height: 640,
       props: { dialog: "edit", preset, isNew, globalSha, routes: this.routesDoc?.routes ?? {} },
     });
   }
@@ -495,7 +677,11 @@ export default class Team extends View {
     const savingCollected = p?.dialog === "routes" && this.modelsSection === "collected";
     const savingMachine = p?.dialog === "routes" && this.modelsSection === "machine";
     if (!p?.dialog || (p.dialog === "routes" && !savingCollected && !savingMachine && !p.routesSha)) return;
-    const editedPreset = p.dialog === "edit" ? normalizePresetFromEdit(this.editor.value(), p.routes ?? {}, this.autoCommands ?? {}) : null;
+    const editedPreset = p.dialog === "edit"
+      ? (this.editMode === "form"
+        ? JSON.stringify(this.readFormPreset(), null, 2)
+        : normalizePresetFromEdit(this.editor.value(), p.routes ?? {}, this.autoCommands ?? {}))
+      : null;
     const args = p.dialog === "edit" ? ["preset", "save", "--json", editedPreset,
       ...(p.isNew ? [] : ["--update", "--expected-id", this.origId, ...(this.origSha ? ["--expected-sha", this.origSha] : [])])]
       : savingCollected ? ["models", "save", "--text", this.modelsEditor.value(), ...(p.modelsSha ? ["--expected-sha", p.modelsSha] : []), "--json"]
@@ -594,8 +780,9 @@ export default class Team extends View {
       cx.notify();
       return;
     }
+    const roleCounts = overrideRoles ? undefined : Object.fromEntries([...this.roleCounts.entries()].filter(([, n]) => n > 1));
     const args = buildLaunchArgs({
-      presetId: item.id, cwd: context.cwd, parent, selectedRoles,
+      presetId: item.id, cwd: context.cwd, parent, selectedRoles, roleCounts,
       task: "", withServers: Boolean(withServers && !runId), runId, notifyParent: Boolean(parent || runId),
     });
     this.launching = true;
@@ -613,8 +800,8 @@ export default class Team extends View {
         }
         if (context !== this.context) return;
         const lines = [
-          ...(output?.roles ?? []).map(role => `${role.id}: ${role.sent ? "sent" : role.reason || "brief not sent"}`),
-          ...(output?.servers ?? []).map(srv => `${srv.id}: ${srv.ready ? "ready" : srv.reason || "not ready"}`),
+          ...(output?.roles ?? []).map(role => `${role.id}: ${role.sent ? "sent" : role.reason || "brief not sent"}${role.worktree ? " (worktree)" : ""}`),
+          ...(output?.servers ?? []).map(srv => `${srv.id}: ${srv.ready ? "ready" : srv.reason || "not ready"}${srv.port ? ` (:${srv.port})` : ""}`),
         ];
         const error = success ? null : output?.roles ? "No roles were launched successfully."
           : formatValidationError(result.stderr, result.stdout);
@@ -627,6 +814,199 @@ export default class Team extends View {
         cx.notify();
       }
     });
+  }
+
+  renderEditForm(t, p) {
+    const routes = p.routes ?? {};
+    const routeNames = Object.keys(routes).sort();
+    const roleIds = this.formRoles.map(r => r.id.value().trim()).filter(Boolean);
+    const field = (label, el) => v_flex().gap(3).min_w(0)
+      .child(div().text_size(10.5).text_color(t.muted).child(label))
+      .child(el);
+    return v_flex().id("edit-form").flex_1().min_h(0).overflow_y_scrollbar().gap(10).pr(4)
+      .child(card(t).gap(8)
+        .child(h_flex().gap(8).items_center()
+          .child(field("Preset ID", p.isNew
+            ? textField(t, this.formMeta.id)
+            : div().h(28).px(8).flex().items_center().rounded(6).bg(t.background).border_1().border_color(t.border).text_size(12).text_color(t.muted).child(this.formMeta.id.value())).w(180))
+          .child(field("Name", textField(t, this.formMeta.name)).flex_1()))
+        .child(field("Description", textField(t, this.formMeta.description))))
+      .child(card(t).gap(6)
+        .child(h_flex().gap(8).items_center()
+          .child(caption(t, "Servers").flex_none())
+          .child(div().text_size(10.5).text_color(t.dim).flex_1().truncate().child("역할별 서버 사용 시 {port} 또는 PORT 환경변수로 포트가 분리됩니다."))
+          .child(action(t, "form-add-server", "+ Server", (_e, cx) => {
+            this.formServers.push(this.makeServerFormRow({ id: `srv${this.formServers.length + 1}`, commandText: "bun dev --port {port}", cwd: "." }));
+            cx.notify();
+          })))
+        .when(!this.formServers.length, box => box.child(div().text_size(11).text_color(t.dim).child("등록된 서버 없음 (프로젝트 오버레이에서 정의할 수도 있습니다).")))
+        .when(this.formServers.length > 0, box => box.child(h_flex().gap(6).px(2)
+          .child(div().w(88).text_size(10).text_color(t.dim).child("ID"))
+          .child(div().flex_1().text_size(10).text_color(t.dim).child("Command"))
+          .child(div().w(72).text_size(10).text_color(t.dim).child("Cwd"))
+          .child(div().w(28))))
+        .children(this.formServers.map((srv, idx) => h_flex().gap(6).items_center().min_w(0)
+          .child(textField(t, srv.id, 26).w(88))
+          .child(textField(t, srv.commandText, 26).flex_1())
+          .child(textField(t, srv.cwd, 26).w(72))
+          .child(action(t, `form-del-server-${idx}`, "✕", (_e, cx) => {
+            const [removed] = this.formServers.splice(idx, 1);
+            this.releaseServerRow(removed);
+            cx.notify();
+          }, { danger: true })))))
+      .child(h_flex().gap(8).items_center()
+        .child(caption(t, `Roles (${this.formRoles.length})`))
+        .child(div().flex_1())
+        .child(action(t, "form-add-role", "+ Role", (_e, cx) => {
+          const fallbackRoute = routeNames[0] ?? "";
+          const nextIdx = this.formRoles.length;
+          this.formRoles.push(this.makeRoleFormRow({
+            id: `worker-${nextIdx + 1}`,
+            title: "Worker",
+            mode: fallbackRoute ? "route" : "command",
+            route: fallbackRoute,
+            commandText: fallbackRoute ? formatCommandInput(routes[fallbackRoute]?.command ?? []) : "pi",
+            default: true,
+            instructions: "Complete the assigned task and report via hc-team send.",
+          }));
+          this.expandedRoles.add(nextIdx);
+          this.confirmDelRoleIdx = null;
+          cx.notify();
+        })))
+      .children(this.formRoles.map((role, idx) => {
+        const curId = role.id.value().trim();
+        const curTitle = role.title.value().trim();
+        const otherIds = roleIds.filter(id => id && id !== curId);
+        const staleTalks = role.talksTo.filter(id => !otherIds.includes(id));
+        const expanded = this.expandedRoles?.has(idx) ?? true;
+        const menuOpen = this.openRoleRouteMenu === idx;
+        const confirmingDel = this.confirmDelRoleIdx === idx;
+        const routeSummary = role.mode === "command"
+          ? "Custom command"
+          : (role.route ? `route: ${role.route}` : "route 선택");
+        const resolvedHint = role.mode === "route" && role.route && routes[role.route]?.command
+          ? describeRoleCommand(routes[role.route].command)
+          : null;
+        const routeUnknown = role.mode === "route" && role.route && !Object.hasOwn(routes, role.route);
+        const summaryTags = [
+          role.default ? "기본" : null,
+          role.readOnly ? "RO" : null,
+          role.scalable ? "×N" : null,
+          role.worktree ? "worktree" : null,
+          role.ownServer ? (this.formServers.length ? "개별서버" : "서버미정의") : null,
+        ].filter(Boolean);
+        return card(t).gap(expanded ? 8 : 0)
+          .child(h_flex().gap(6).items_center().min_w(0)
+            .child(Button.new(`form-role-toggle-${idx}`).flex().flex_1().min_w(0).h(24).px(4).gap(6).items_center().rounded(5)
+              .cursor_pointer().hover(s => s.bg(t.hover))
+              .on_click((_e, cx) => {
+                if (expanded) this.expandedRoles.delete(idx);
+                else this.expandedRoles.add(idx);
+                this.openRoleRouteMenu = null;
+                this.confirmDelRoleIdx = null;
+                cx.notify();
+              })
+              .child(div().flex_none().text_size(10.5).text_color(t.dim).child(expanded ? "▾" : "▸"))
+              .child(badge(t, `#${idx}`))
+              .child(div().flex_none().font_semibold().text_size(12).child(curId || "(id)"))
+              .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(curTitle || routeSummary))
+              .children(summaryTags.map(tag => badge(t, tag, tag === "서버미정의" ? t.ansi1 : t.muted))))
+            .child(action(t, `form-del-role-${idx}`, confirmingDel ? "삭제?" : "✕", (_e, cx) => {
+              if (this.formRoles.length <= 1) return;
+              if (!confirmingDel) {
+                this.confirmDelRoleIdx = idx;
+                cx.notify();
+                return;
+              }
+              const [removed] = this.formRoles.splice(idx, 1);
+              this.releaseRoleRow(removed);
+              if (curId) {
+                for (const other of this.formRoles) other.talksTo = other.talksTo.filter(x => x !== curId);
+              }
+              const shifted = new Set();
+              for (const i of this.expandedRoles) {
+                if (i < idx) shifted.add(i);
+                else if (i > idx) shifted.add(i - 1);
+              }
+              if (!shifted.size && this.formRoles.length) shifted.add(0);
+              this.expandedRoles = shifted;
+              this.openRoleRouteMenu = null;
+              this.confirmDelRoleIdx = null;
+              cx.notify();
+            }, { danger: true, selected: confirmingDel, disabled: this.formRoles.length <= 1 })))
+          .when(expanded, body => body
+            .child(h_flex().gap(6).items_center().min_w(0)
+              .child(field("ID", textField(t, role.id, 26)).w(140))
+              .child(field("Title", textField(t, role.title, 26)).flex_1()))
+            .child(h_flex().gap(6).items_center().min_w(0).flex_wrap()
+              .child(action(t, `form-role-route-${idx}`, `${routeSummary} ${menuOpen ? "▴" : "▾"}`, (_e, cx) => {
+                this.openRoleRouteMenu = menuOpen ? null : idx;
+                cx.notify();
+              }, { selected: menuOpen }))
+              .when(Boolean(routeUnknown), row => row.child(badge(t, `없는 route: ${role.route}`, t.ansi1)))
+              .when(Boolean(resolvedHint && !resolvedHint.error), row => row
+                .child(harnessBadge(t, resolvedHint))
+                .when(Boolean(resolvedHint.model), inner => inner.child(badge(t, resolvedHint.model).max_w(240).truncate()))))
+            .when(menuOpen, box => box.child(v_flex().id(`form-route-menu-${idx}`).max_h(150).overflow_y_scrollbar().p(4).gap(2).rounded(6).bg(t.background).border_1().border_color(t.border)
+              .children(routeNames.map(name => {
+                const active = role.mode === "route" && role.route === name;
+                const info = describeRoleCommand(routes[name]?.command);
+                return Button.new(`form-route-opt-${idx}-${name}`).flex().w_full().min_w(0).h(26).px(8).gap(6).items_center().rounded(5)
+                  .bg(active ? t.selected : t.background).text_size(11.5).text_color(t.foreground).when(active, b => b.font_semibold())
+                  .cursor_pointer().hover(s => s.bg(active ? t.selected : t.hover))
+                  .on_click((_e, cx) => {
+                    role.mode = "route";
+                    role.route = name;
+                    role.commandText.set_value(formatCommandInput(routes[name]?.command ?? []));
+                    this.openRoleRouteMenu = null;
+                    cx.notify();
+                  })
+                  .child(div().flex_none().child(name))
+                  .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).child([info.name, info.model].filter(Boolean).join(" · ")))
+                  .when(active, b => b.child(div().flex_none().text_size(11).text_color(t.ansi2).child("✓")));
+              }))
+              .child(Button.new(`form-route-opt-${idx}-custom`).flex().w_full().min_w(0).h(26).px(8).gap(6).items_center().rounded(5)
+                .bg(role.mode === "command" ? t.selected : t.background).text_size(11.5).text_color(t.foreground).when(role.mode === "command", b => b.font_semibold())
+                .cursor_pointer().hover(s => s.bg(role.mode === "command" ? t.selected : t.hover))
+                .on_click((_e, cx) => {
+                  role.mode = "command";
+                  this.openRoleRouteMenu = null;
+                  cx.notify();
+                })
+                .child(div().flex_1().child("Custom command (직접 입력)"))
+                .when(role.mode === "command", b => b.child(div().flex_none().text_size(11).text_color(t.ansi2).child("✓"))))))
+            .when(role.mode === "command", box => box.child(field("Command (argv)", textField(t, role.commandText, 26))))
+            .child(v_flex().gap(4)
+              .child(h_flex().gap(6).items_center().flex_wrap()
+                .child(div().w(58).text_size(10.5).text_color(t.dim).child("실행·권한"))
+                .child(checkbox(t, `form-cb-default-${idx}`, "기본 실행", role.default, (_e, cx) => { role.default = !role.default; cx.notify(); }))
+                .child(checkbox(t, `form-cb-ro-${idx}`, "읽기 전용", role.readOnly, (_e, cx) => { role.readOnly = !role.readOnly; cx.notify(); })))
+              .child(h_flex().gap(6).items_center().flex_wrap()
+                .child(div().w(58).text_size(10.5).text_color(t.dim).child("병렬·격리"))
+                .child(checkbox(t, `form-cb-scalable-${idx}`, "N개 병렬 (×N)", role.scalable, (_e, cx) => { role.scalable = !role.scalable; cx.notify(); }))
+                .child(checkbox(t, `form-cb-worktree-${idx}`, "개별 Worktree", role.worktree, (_e, cx) => { role.worktree = !role.worktree; cx.notify(); }))
+                .child(checkbox(t, `form-cb-server-${idx}`, "역할별 서버·포트", role.ownServer, (_e, cx) => { role.ownServer = !role.ownServer; cx.notify(); })))
+              .when(role.ownServer && !this.formServers.length, box => box.child(div().text_size(11).text_color(t.ansi3)
+                .child("⚠ 상단 Servers(또는 docs/ 오버레이)에 서버를 추가해야 역할별 서버가 실행됩니다.")))
+              .when(role.scalable && !role.worktree && !role.readOnly, box => box.child(div().text_size(10.5).text_color(t.dim)
+                .child("팁: 쓰기 가능한 N개 병렬 워커는 개별 Worktree를 켜면 충돌을 피할 수 있습니다."))))
+            .child(field("Skills (쉼표 구분)", textField(t, role.skillsText, 26)))
+            .child(field("Tools (한 줄에 하나씩)", Editor.new(role.toolsText).h(48).w_full().border_1().border_color(t.input).rounded(6)))
+            .when(otherIds.length > 0 || staleTalks.length > 0, box => box.child(h_flex().gap(6).items_center().flex_wrap()
+              .child(div().text_size(10.5).text_color(t.muted).child("Talks to:"))
+              .children(otherIds.map(other => {
+                const linked = role.talksTo.includes(other);
+                return action(t, `form-talks-${idx}-${other}`, `${linked ? "✓ " : "+ "}${other}`, (_e, cx) => {
+                  role.talksTo = linked ? role.talksTo.filter(x => x !== other) : [...role.talksTo, other];
+                  cx.notify();
+                }, { selected: linked });
+              }))
+              .children(staleTalks.map(stale => action(t, `form-talks-stale-${idx}-${stale}`, `✕ ${stale} (없음)`, (_e, cx) => {
+                role.talksTo = role.talksTo.filter(x => x !== stale);
+                cx.notify();
+              }, { danger: true })))))
+            .child(field("Instructions", Editor.new(role.instructions).h(76).w_full().border_1().border_color(t.input).rounded(6))));
+      }));
   }
 
   dialog(t, p) {
@@ -656,16 +1036,19 @@ export default class Team extends View {
     }
     const edit = p.dialog === "edit", routes = p.dialog === "routes", stop = p.dialog === "confirm-stop";
     const editing = edit || routes;
+    const editForm = edit && this.editMode === "form";
+    const editJson = edit && this.editMode !== "form";
     const collected = routes && this.modelsSection === "collected";
     const machine = routes && this.modelsSection === "machine";
-    const title = routes ? "Models" : edit ? p.isNew ? "New preset" : "Edit preset JSON" : stop ? `Stop run #${p.id}?` : `Delete ${p.id}?`;
+    const title = routes ? "Models" : edit ? (p.isNew ? "New preset" : "Edit preset") : stop ? `Stop run #${p.id}?` : `Delete ${p.id}?`;
     const detail = collected
       ? "수집된 모델 프로파일(_models.md). 아래 입력으로 포커스된 에이전트에게 새 모델 조사·동기화를 바로 요청할 수 있습니다."
       : machine ? `이 컴퓨터 전용 로컬 설정(${p.machinePath || "~/.config/hc-team/machine.json"}). 에이전트 실행 경로·환경을 머신별로 분리합니다.`
         : routes ? "프리셋 역할들이 공통으로 참조하는 에이전트별 모델 라우팅(_routes.json)."
-          : edit ? "전역 프리셋 JSON입니다. 각 role의 command를 수정하면 해당 역할만의 모델로 저장되고, 그대로 두거나 지우면 route의 공통 모델을 따릅니다."
-            : stop ? "This ends all live role and server terminals in this run, including any still working."
-              : "This removes the global preset. Project docs and running sessions are not removed.";
+          : editForm ? "전역 프리셋 편집 · 역할별 모델과 병렬/Worktree/서버 옵션을 체크박스로 설정합니다. (owns·checkpoints 등 고급 필드는 JSON 탭)"
+            : editJson ? "전역 프리셋 JSON입니다. 각 role의 command를 수정하면 해당 역할만의 모델로 저장되고, 그대로 두거나 지우면 route의 공통 모델을 따릅니다."
+              : stop ? "This ends all live role and server terminals in this run, including any still working."
+                : "This removes the global preset. Project docs and running sessions are not removed.";
     const label = editing ? "Save" : stop ? "Stop run" : "Delete preset";
     const candidates = p.syncCandidates ?? [];
     const targetLabel = candidates.find(c => c.address === this.syncTarget)?.label || "활성 에이전트 없음";
@@ -675,9 +1058,14 @@ export default class Team extends View {
       this.syncNotice = null;
       cx.notify();
     }, { selected: this.modelsSection === id });
+    const editModeTab = (mode, text) => action(t, `edit-mode-${mode}`, text, (_e, cx) => this.switchEditMode(mode, p, cx),
+      { selected: this.editMode === mode });
     return v_flex().size_full().min_h(0).p(16).gap(10).bg(t.popover).text_color(t.foreground).text_size(13)
       .child(h_flex().gap(8).items_center().flex_none()
         .child(div().text_size(16).font_semibold().child(title))
+        .when(edit, el => el.child(h_flex().gap(4).p(2).rounded(8).bg(t.chrome)
+          .child(editModeTab("form", "Form"))
+          .child(editModeTab("json", "JSON"))))
         .when(routes, el => el.child(h_flex().gap(4).p(2).rounded(8).bg(t.chrome)
           .child(sectionTab("routes", "공통 역할 모델"))
           .child(sectionTab("collected", "수집된 모델"))
@@ -685,7 +1073,7 @@ export default class Team extends View {
         .child(div().flex_1())
         .when(routes && !machine && Boolean(p.doc.reviewed), el => el.child(div().text_size(10.5).text_color(t.dim).child(p.doc.reviewed))))
       .child(div().text_size(11.5).line_height("16px").text_color(t.dim).child(detail))
-      .when(edit && Object.keys(p.routes ?? {}).length > 0, el => el.child(chips().items_center().flex_none()
+      .when(editJson && Object.keys(p.routes ?? {}).length > 0, el => el.child(chips().items_center().flex_none()
         .child(div().text_size(10.5).text_color(t.dim).child("routes:"))
         .children(Object.keys(p.routes).sort().map(name => badge(t, name)))))
       .when(routes && !collected && !machine && !p.routesSha, el => el.child(meta(t, "Run hc-team seed to create _routes.json, then reopen Models.")))
@@ -719,7 +1107,8 @@ export default class Team extends View {
         .when(Boolean(p.machineExecutables?.length), box => box.child(chips().children(p.machineExecutables.map(row =>
           badge(t, `${row.name}: ${row.ok ? row.source : "missing"}`, row.ok ? t.ansi2 : t.ansi1)))))
         .when(Boolean(this.syncNotice), box => box.child(div().text_size(11.5).text_color(t.ansi2).child(this.syncNotice)))))
-      .when(editing && !collected && !machine, el => el.child(Editor.new(this.editor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
+      .when(editForm, el => el.child(this.renderEditForm(t, p)))
+      .when((editJson || routes) && !collected && !machine, el => el.child(Editor.new(this.editor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
       .when(collected, el => el.child(Editor.new(this.modelsEditor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
       .when(machine, el => el.child(Editor.new(this.machineEditor).flex_1().min_h(0).border_1().border_color(t.input).rounded(6)))
       .when(!editing, el => el.child(div().flex_1()))
@@ -732,35 +1121,98 @@ export default class Team extends View {
   }
 
   launchBar(t, item, space, allPanes, allTerminals) {
-    const candidates = availableParents(space, allPanes, allTerminals);
-    const parents = [...candidates.map(terminal => terminal.address), null];
-    const parent = this.parentOverride === undefined ? pickDefaultParent(space, allPanes, allTerminals, focused())
-      : parents.includes(this.parentOverride) ? this.parentOverride : null;
+    const { candidates, parents, parent } = this.resolveParent(space, allPanes, allTerminals);
     const chosen = candidates.find(terminal => terminal.address === parent);
     const parentName = chosen?.name || chosen?.program?.name;
     const preset = item.preset;
-    const canLaunch = this.roles.size > 0 && Boolean(this.context.cwd) && !this.launching;
+    const totalInstances = [...this.roles].reduce((sum, id) => sum + (this.roleCounts.get(id) ?? 1), 0);
+    const canLaunch = this.roles.size > 0 && totalInstances <= 12 && Boolean(this.context.cwd) && !this.launching;
+    const parentMenuOpen = Boolean(this.launchParentMenu) && parents.length > 1;
+    const hasOwnServer = preset.roles.some(role => this.roles.has(role.id) && role.ownServer);
+    const hasServers = Boolean(preset.servers?.length);
     return card(t)
       .child(h_flex().gap(8).items_center().min_w(0)
         .child(caption(t, "Parent").flex_none())
-        .child(action(t, "parent", `${parent ? [parentName, parent].filter(Boolean).join(" · ") : "None (no parent)"}${parents.length > 1 ? " ↻" : ""}`, (_e, cx) => {
-          this.parentOverride = parents[(parents.indexOf(parent) + 1) % parents.length];
+        .child(action(t, "parent", `${parent ? [parentName, parent].filter(Boolean).join(" · ") : "None (no parent)"}${parents.length > 1 ? (parentMenuOpen ? " ▴" : " ▾") : ""}`, (_e, cx) => {
+          this.launchParentMenu = !parentMenuOpen;
           cx.notify();
-        }, { disabled: parents.length === 1 })))
+        }, { selected: parentMenuOpen, disabled: parents.length <= 1 }))
+        .when(this.parentOverride === undefined && Boolean(parent), el => el.child(div().flex_none().text_size(10).text_color(t.dim).child("auto"))))
+      .when(parentMenuOpen, box => box.child(v_flex().id("launch-parent-menu").max_h(144).overflow_y_scrollbar().p(4).gap(2).rounded(6).bg(t.background).border_1().border_color(t.border)
+        .children(parents.map(addr => {
+          const info = candidates.find(terminal => terminal.address === addr);
+          const label = addr ? [info?.name || info?.program?.name, addr].filter(Boolean).join(" · ") : "None (no parent)";
+          const active = addr === parent;
+          return Button.new(`launch-parent-opt-${addr ?? "none"}`).flex().w_full().min_w(0).h(26).px(8).gap(6).items_center().rounded(5)
+            .bg(active ? t.selected : t.background).text_size(12).text_color(t.foreground).when(active, btn => btn.font_semibold())
+            .cursor_pointer().hover(s => s.bg(active ? t.selected : t.hover))
+            .on_click((_e, cx) => {
+              this.parentOverride = addr;
+              this.launchParentMenu = false;
+              cx.notify();
+            })
+            .child(div().flex_1().min_w(0).truncate().child(label))
+            .when(active, btn => btn.child(div().flex_none().text_size(11).text_color(t.ansi2).child("✓")));
+        }))))
       .child(caption(t, "Roles to launch"))
-      .child(chips().children(preset.roles.map(role => action(t, `role-select-${role.id}`, `${this.roles.has(role.id) ? "✓ " : "+ "}${role.id}`, (_e, cx) => {
-        if (this.roles.has(role.id)) this.roles.delete(role.id); else this.roles.add(role.id);
-        cx.notify();
-      }, { selected: this.roles.has(role.id) }))))
-      .child(h_flex().gap(8).items_center()
+      .child(chips().children(preset.roles.map(role => {
+        const selected = this.roles.has(role.id);
+        const count = this.roleCounts.get(role.id) ?? 1;
+        if (!role.scalable || !selected) {
+          const roleLabel = `${selected ? "✓ " : "+ "}${role.id}${role.scalable ? " (×N)" : ""}`;
+          return action(t, `role-select-${role.id}`, roleLabel, (_e, cx) => {
+            if (selected) {
+              this.roles.delete(role.id);
+              this.roleCounts.delete(role.id);
+            } else {
+              this.roles.add(role.id);
+              if (role.ownServer && hasServers) this.withServers = true;
+            }
+            cx.notify();
+          }, { selected });
+        }
+        const canInc = count < 8 && totalInstances < 12;
+        return h_flex().items_center().gap(2).h(28).px(4).rounded(6).border_1().border_color(t.input).bg(t.selected)
+          .child(Button.new(`role-select-${role.id}`).flex().h(22).px(4).items_center().rounded(4)
+            .text_size(12).font_semibold().text_color(t.foreground).cursor_pointer().hover(s => s.bg(t.hover))
+            .on_click((_e, cx) => {
+              this.roles.delete(role.id);
+              this.roleCounts.delete(role.id);
+              cx.notify();
+            })
+            .child(`✓ ${role.id}`))
+          .child(div().w(1).h(14).bg(t.border).mx(2))
+          .child(Button.new(`role-dec-${role.id}`).flex().size(22).items_center().justify_center().rounded(4)
+            .bg(t.raised).text_size(11).text_color(count > 1 ? t.foreground : t.dim).disabled(count <= 1)
+            .when(count > 1, b => b.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => {
+              this.roleCounts.set(role.id, Math.max(1, count - 1));
+              cx.notify();
+            }))
+            .child("−"))
+          .child(div().px(3).text_size(11.5).font_semibold().text_color(t.foreground).child(String(count)))
+          .child(Button.new(`role-inc-${role.id}`).flex().size(22).items_center().justify_center().rounded(4)
+            .bg(t.raised).text_size(11).text_color(canInc ? t.foreground : t.dim).disabled(!canInc)
+            .when(canInc, b => b.cursor_pointer().hover(s => s.bg(t.hover)).on_click((_e, cx) => {
+              this.roleCounts.set(role.id, Math.min(8, count + 1));
+              cx.notify();
+            }))
+            .child("+"));
+      })))
+      .when(hasOwnServer && !hasServers, el => el.child(div().text_size(11).text_color(t.ansi3)
+        .child("⚠ 역할별 서버가 켜져 있지만 Servers가 미정의 상태입니다. Edit에서 서버를 추가하세요.")))
+      .child(h_flex().gap(6).items_center().flex_wrap()
         .child(action(t, "edit-with-agent", "Edit w/ Agent", () => this.editWithAgent(item, parent, space, allPanes, allTerminals),
           { disabled: !candidates.length }))
-        .when(Boolean(preset.servers?.length), el => el.child(action(t, "servers", this.withServers ? "✓ Servers" : "+ Servers", (_e, cx) => {
-          this.withServers = !this.withServers;
-          cx.notify();
-        }, { selected: this.withServers })))
+        .when(hasServers, el => {
+          const srvLabel = hasOwnServer ? "Servers (포트 분리)" : "Servers";
+          return el.child(action(t, "servers", `${this.withServers ? "✓ " : "+ "}${srvLabel}`, (_e, cx) => {
+            this.withServers = !this.withServers;
+            cx.notify();
+          }, { selected: this.withServers }));
+        })
         .child(div().flex_1())
-        .child(action(t, "launch", this.launching ? "Launching…" : "Launch", (_e, cx) => this.launch(item, parent, cx), { primary: true, disabled: !canLaunch })))
+        .child(action(t, "launch", this.launching ? "Launching…" : (totalInstances > 1 ? `Launch (${totalInstances})` : "Launch"),
+          (_e, cx) => this.launch(item, parent, cx), { primary: true, disabled: !canLaunch })))
       .when(!this.context.cwd, el => el.child(meta(t, "Launch and project docs require a local project folder.")));
   }
 
@@ -823,12 +1275,7 @@ export default class Team extends View {
       const count = (harnesses.get(harness.name)?.count ?? 0) + 1;
       harnesses.set(harness.name, { harness, count });
     }
-    const selectedParent = (() => {
-      const candidates = availableParents(space, allPanes, allTerminals);
-      const parents = [...candidates.map(terminal => terminal.address), null];
-      return this.parentOverride === undefined ? pickDefaultParent(space, allPanes, allTerminals, focused())
-        : parents.includes(this.parentOverride) ? this.parentOverride : null;
-    })();
+    const { parent: selectedParent } = this.resolveParent(space, allPanes, allTerminals);
     const initDisabled = !this.context.cwd || Boolean(this.scaffolding);
     const soloDisabled = !this.context.cwd || Boolean(this.launching);
     return root.child(body
@@ -847,15 +1294,18 @@ export default class Team extends View {
       .child(v_flex().gap(4).child(caption(t, "Role preview"))
         .children(roles.map(({ role, harness }) => v_flex().gap(4).py(8).border_b(1).border_color(t.border)
           .child(h_flex().gap(6).items_center().min_w(0)
-            .child(div().font_semibold().child(role.id))
+            .child(div().flex_none().font_semibold().child(role.id))
             .child(meta(t, role.title).flex_1().min_w(0).truncate())
-            .when(role.readOnly, el => el.child(badge(t, "Read only")))
             .child(Button.new(`run-solo-${role.id}`).flex().flex_none().h(20).px(6).items_center().rounded(5)
               .border_1().border_color(t.border).bg(t.background).text_size(10).text_color(t.dim).disabled(soloDisabled)
               .when(!soloDisabled, btn => btn.cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
-                .on_click((_e, cx) => this.launch(item, selectedParent, cx, { roles: [role.id], withServers: false })))
+                .on_click((_e, cx) => this.launch(item, selectedParent, cx, { roles: [role.id], withServers: Boolean(role.ownServer && preset.servers?.length) })))
               .child("Run")))
           .child(chips().items_center().min_w(0)
+            .when(role.readOnly, el => el.child(badge(t, "Read-only")))
+            .when(role.scalable, el => el.child(badge(t, "×N", t.ansi4)))
+            .when(role.worktree, el => el.child(badge(t, "Worktree", t.ansi2)))
+            .when(role.ownServer, el => el.child(badge(t, preset.servers?.length ? "개별 서버" : "개별 서버 (미정의)", preset.servers?.length ? t.ansi3 : t.ansi1)))
             .when(Boolean(role.route), el => el.child(badge(t, role.route)))
             .when(!harness.error, el => el.child(harnessBadge(t, harness)))
             .when(Boolean(harness.model), el => el.child(badge(t, harness.model).max_w(260).truncate())))
@@ -865,7 +1315,7 @@ export default class Team extends View {
           .when(Boolean(role.tools?.length), el => el.child(meta(t, `Tools: ${role.tools.join(" · ")}`).truncate()))
           .when(Boolean(role.talksTo?.length), el => el.child(meta(t, `Talks to: ${role.talksTo.join(", ")}`))))))
       .child(h_flex().justify_between().gap(8)
-        .child(action(t, "edit-preset", "Edit JSON", () => this.edit(item.globalPreset, false, item.globalSha)))
+        .child(action(t, "edit-preset", "Edit", () => this.edit(item.globalPreset, false, item.globalSha)))
         .child(action(t, "delete-preset", "Delete", () => this.confirm("confirm-delete", item.id), { danger: true }))));
   }
 
@@ -885,10 +1335,7 @@ export default class Team extends View {
     const entries = sortPresets(this.presets, this.lastUsed);
     const byId = new Map(entries.map(entry => [entry.id, entry]));
     const soloPreset = entries.find(entry => entry.id === (this.soloPresetId ?? this.selectedId)) ?? entries[0] ?? null;
-    const candidates = availableParents(space, allPanes, allTerminals);
-    const parents = [...candidates.map(terminal => terminal.address), null];
-    const parent = this.parentOverride === undefined ? pickDefaultParent(space, allPanes, allTerminals, focused())
-      : parents.includes(this.parentOverride) ? this.parentOverride : null;
+    const { candidates, parents, parent } = this.resolveParent(space, allPanes, allTerminals);
     const chosen = candidates.find(terminal => terminal.address === parent);
     const parentLabel = parent ? [chosen?.name || chosen?.program?.name, parent].filter(Boolean).join(" · ") : "None";
     const canSummon = Boolean(this.context?.cwd) && !this.launching;
@@ -916,8 +1363,9 @@ export default class Team extends View {
         return el.child(card(t).gap(6)
           .child(h_flex().gap(6).items_center().min_w(0)
             .child(caption(t, "단일 팀원 실행").flex_none())
+            .when(Boolean(this.launching), box => box.child(div().text_size(10.5).text_color(t.working).child("실행 중…")))
             .child(div().flex_1())
-            .child(action(t, "solo-parent", `${parentLabel}${parents.length > 1 ? (parentMenuOpen ? " ▴" : " ▾") : ""}`, (_e, cx) => {
+            .child(action(t, "solo-parent", `Parent: ${parentLabel}${parents.length > 1 ? (parentMenuOpen ? " ▴" : " ▾") : ""}`, (_e, cx) => {
               this.soloMenu = parentMenuOpen ? null : "parent";
               cx.notify();
             }, { selected: parentMenuOpen, disabled: parents.length <= 1 })))
@@ -985,7 +1433,7 @@ export default class Team extends View {
     if (p?.dialog) return this.dialog(t, p);
     this.wakeWatches(cx);
     const space = spaces().find(s => s.active), allPanes = panes(), allTerminals = terminals();
-    this.syncPresets(space, allPanes, cx);
+    this.syncPresets(space, allPanes, allTerminals, cx);
     const runs = groupRuns(allTerminals), notice = this.notice;
     const tab = (id, label) => action(t, `teams-tab-${id}`, label, (_e, cx) => { this.tab = id; cx.notify(); }, { selected: this.tab === id });
     return v_flex().size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13)
@@ -994,13 +1442,14 @@ export default class Team extends View {
           .child(tab("presets", "Presets"))
           .child(tab("runs", h_flex().gap(4).items_center().child("Runs").child(badge(t, String(runs.length))))))
         .child(div().flex_1())
-        .child(action(t, "models", h_flex().gap(4).items_center()
-          .child("Models")
-          .when(Boolean(this.routesReviewed), el => el.child(div().text_size(9.5).text_color(t.dim).child(this.routesReviewed.replace(/^\d{4}-/, "")))),
-        () => this.editRoutes(space, allPanes, allTerminals), { disabled: !this.routesDoc }))
+        .child(action(t, "models", "Models", () => this.editRoutes(space, allPanes, allTerminals), { disabled: !this.routesDoc }))
         .child(action(t, "new-preset", "+ New", () => this.edit(newPresetSkeleton(), true))))
       .when(Boolean(notice), el => el.child(v_flex().id("teams-notice").flex_none().max_h(144).overflow_y_scrollbar().mx(12).mt(8).p(8).gap(4).rounded(6).bg(t.raised)
-        .when(Boolean(notice.title), card => card.child(caption(t, notice.title)))
+        .child(h_flex().gap(6).items_center()
+          .child(notice.title ? caption(t, notice.title).flex_1() : div().flex_1())
+          .child(Button.new("dismiss-notice").flex().size(18).items_center().justify_center().rounded(4)
+            .text_size(10.5).text_color(t.dim).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground))
+            .on_click((_e, cx) => { this.notice = null; cx.notify(); }).child("✕")))
         .children((notice.lines ?? []).map(line => meta(t, line)))
         .when(Boolean(notice.error), card => card.child(div().text_size(12).text_color(t.ansi1).child(notice.error)))))
       .child(this.tab === "runs" ? this.renderRuns(t, runs, space, allPanes, allTerminals) : this.renderPresets(t, space, allPanes, allTerminals));

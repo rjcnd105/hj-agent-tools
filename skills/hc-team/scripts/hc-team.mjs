@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { appendFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { createServer as createNetServer } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -72,6 +73,9 @@ export const PRESET_JSON_SCHEMA = {
           title: { ...string, maxLength: 60 }, command, route: { type: 'string', pattern: presetId },
           default: { type: 'boolean', default: true },
           readOnly: { type: 'boolean', default: false },
+          scalable: { type: 'boolean', default: false },
+          worktree: { type: 'boolean', default: false },
+          ownServer: { type: 'boolean', default: false },
           skills: strings, tools: strings, owns: strings, checkpoints: strings,
           talksTo: { ...strings, items: { type: 'string', pattern: roleId }, $comment: 'Each ID must refer to another role in the same preset.' },
           instructions: string,
@@ -687,18 +691,170 @@ async function listTerminals(runId, { includeFinished = false } = {}) {
     && (!runId || t.labels?.[runLabel] === runId));
 }
 
-function planTerminal(row, label, { runId, id, projectRoot, parent }) {
-  const cwd = label === serverLabel ? resolve(projectRoot, row.cwd) : projectRoot;
+async function allocateFreePorts(count) {
+  if (count <= 0) return [];
+  // Stay below macOS/IANA ephemeral port cutoff (49152) so servers.mjs discovers these listeners.
+  const sockets = [];
+  const used = new Set();
+  try {
+    const ports = [];
+    for (let i = 0; i < count; i++) {
+      let bound = null;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const port = randomInt(20000, 49000);
+        if (used.has(port)) continue;
+        const server = createNetServer();
+        const ok = await new Promise(resolveListen => {
+          server.once('error', () => resolveListen(false));
+          server.listen(port, '127.0.0.1', () => resolveListen(true));
+        });
+        if (ok) {
+          sockets.push(server);
+          used.add(port);
+          bound = port;
+          break;
+        }
+      }
+      if (bound === null) throw new CliError('Could not allocate a free non-ephemeral port');
+      ports.push(bound);
+    }
+    return ports;
+  } finally {
+    await Promise.all(sockets.map(s => new Promise(res => s.close(() => res()))));
+  }
+}
+
+async function ensureWorktree(projectRoot, runId, instanceId) {
+  const target = join(runPath(runId), 'worktrees', instanceId);
+  const existing = await statFile(target);
+  if (existing) {
+    if (existing.isSymbolicLink() || !existing.isDirectory()) {
+      throw new CliError(`Refusing non-directory or symlink worktree path for ${instanceId}: ${target}`);
+    }
+    const hasVcs = Boolean(await statFile(join(target, '.jj')) || await statFile(join(target, '.git')));
+    if (!hasVcs || await realpath(target) === await realpath(projectRoot)) {
+      throw new CliError(`Refusing unisolated worktree directory for ${instanceId}: ${target}`);
+    }
+    return target;
+  }
+  await mkdir(dirname(target), { recursive: true });
+  if (await statFile(join(projectRoot, '.jj'))) {
+    const wsName = `hc-${runId}-${instanceId}`.slice(0, 48);
+    try {
+      await exec('jj', ['workspace', 'add', '--name', wsName, '-r', '@', target], { cwd: projectRoot, timeout: 30000 });
+      return target;
+    } catch (error) {
+      throw new CliError(`Failed to create jj workspace for ${instanceId}: ${oneLine(error.stderr || messageOf(error))}`);
+    }
+  }
+  const branch = `hc-team/${runId}/${instanceId}`;
+  try {
+    await exec('git', ['worktree', 'add', '-b', branch, target, 'HEAD'], { cwd: projectRoot, timeout: 30000 });
+    return target;
+  } catch (firstError) {
+    try {
+      await exec('git', ['worktree', 'add', target, branch], { cwd: projectRoot, timeout: 30000 });
+      return target;
+    } catch {
+      throw new CliError(`Failed to create git worktree for ${instanceId}: ${oneLine(firstError.stderr || messageOf(firstError))}`);
+    }
+  }
+}
+
+function findRoleSpec(preset, id) {
+  return preset.roles.find(r => r.id === id)
+    ?? preset.roles.find(r => r.scalable && id.startsWith(`${r.id}-`) && /^\d+$/.test(id.slice(r.id.length + 1)));
+}
+
+function parseRoleSelection(rolesOption, preset, presetIdValue, { allowScaledInstance = false } = {}) {
+  if (rolesOption === undefined) {
+    return preset.roles.filter(role => role.default).map(role => ({ ...role, templateId: role.id }));
+  }
+  const byId = new Map(preset.roles.map(role => [role.id, role]));
+  const seenSelectors = new Set();
+  const seenInstances = new Set();
+  const expanded = [];
+  for (const rawToken of rolesOption.split(',').map(token => token.trim()).filter(Boolean)) {
+    const match = /^([a-z0-9][a-z0-9_-]{0,23})(?:=([0-9]+))?$/.exec(rawToken);
+    if (!match) throw new CliError(`Invalid role selector: ${rawToken}`);
+    const [, roleKey, countText] = match;
+    if (seenSelectors.has(roleKey)) continue;
+    seenSelectors.add(roleKey);
+    if (!byId.has(roleKey)) {
+      const scaledTemplate = allowScaledInstance && countText === undefined ? findRoleSpec(preset, roleKey) : null;
+      if (!scaledTemplate) throw new CliError(`Unknown role ${roleKey} in preset ${presetIdValue}`);
+      const suffix = roleKey.slice(scaledTemplate.id.length + 1);
+      if (seenInstances.has(roleKey)) throw new CliError(`Duplicate role instance ${roleKey}`);
+      seenInstances.add(roleKey);
+      expanded.push({ ...scaledTemplate, id: roleKey, templateId: scaledTemplate.id, title: `${scaledTemplate.title} #${suffix}` });
+      continue;
+    }
+    const role = byId.get(roleKey);
+    const count = countText === undefined ? 1 : Number(countText);
+    if (!Number.isInteger(count) || count < 1 || count > 10) {
+      throw new CliError(`Invalid count for role ${roleKey}: expected 1..10`);
+    }
+    if (count > 1 && !role.scalable) {
+      throw new CliError(`Role ${roleKey} is single-instance only (set scalable: true to launch ${count})`);
+    }
+    if (count === 1) {
+      if (seenInstances.has(role.id)) throw new CliError(`Duplicate role instance ${role.id}`);
+      seenInstances.add(role.id);
+      expanded.push({ ...role, templateId: role.id });
+    } else {
+      for (let i = 1; i <= count; i++) {
+        const instanceId = `${role.id}-${i}`;
+        if (byId.has(instanceId) || seenInstances.has(instanceId)) {
+          throw new CliError(`Scaled role ID ${instanceId} collides with another role in preset ${presetIdValue}`);
+        }
+        seenInstances.add(instanceId);
+        expanded.push({ ...role, id: instanceId, templateId: role.id, title: `${role.title} #${i}` });
+      }
+    }
+  }
+  if (expanded.length > 12) throw new CliError(`Too many role instances (${expanded.length}); maximum is 12`);
+  return expanded;
+}
+
+function uniqueTerminalName(prefix, id, usedNames) {
+  const raw = `${prefix}${id}`;
+  if (raw.length <= 32 && !usedNames.has(raw)) {
+    usedNames.add(raw);
+    return raw;
+  }
+  const digest = createHash('sha256').update(id).digest('hex');
+  for (let n = 0; n < 16; n++) {
+    const suffix = n === 0 ? digest.slice(0, 4) : `${digest.slice(0, 3)}${n.toString(16)}`;
+    const candidate = `${raw.slice(0, 27)}-${suffix}`;
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+  }
+  throw new CliError(`Could not generate unique terminal name for ${id}`);
+}
+
+function planTerminal(row, label, { runId, id, projectRoot, parent, usedNames = new Set() }, extra = {}) {
+  const cwd = extra.cwd ?? (label === serverLabel ? resolve(projectRoot, row.cwd) : projectRoot);
   const labels = { [runLabel]: runId, [presetLabel]: id, [label]: row.id, [cwdLabel]: projectRoot };
   if (parent !== null) labels[parentLabel] = parent;
-  const name = `${runId}${label === serverLabel ? '--' : '-'}${row.id}`;
-  const plan = { id: row.id, address: null, name, command: null, cwd, labels, reason: row.routeError ?? null };
+  const name = uniqueTerminalName(`${runId}${label === serverLabel ? '--' : '-'}`, row.id, usedNames);
+  const plan = {
+    id: row.id, address: null, name, command: null, cwd, labels, reason: row.routeError ?? null,
+    ...(extra.worktree ? { worktree: extra.worktree } : {}),
+    ...(extra.port ? { port: extra.port } : {}),
+    ...(extra.forRole ? { forRole: extra.forRole } : {}),
+    ...(extra.extraEnv ? { extraEnv: extra.extraEnv } : {}),
+    ...(extra.rawExe ? { rawExe: extra.rawExe } : {}),
+  };
   if (plan.reason) return plan;
-  const [exe, ...args] = row.command;
+  const [exe, ...rawArgs] = row.command;
+  const args = extra.port ? rawArgs.map(arg => arg.replaceAll('{port}', String(extra.port))) : [...rawArgs];
   const end = args.indexOf('--');
   if (basename(exe) === 'codex' && !args.slice(0, end === -1 ? args.length : end).includes('--no-daemon')) args.unshift('--no-daemon');
   plan.command = [exe, ...args];
-  try { plan.command[0] = resolveExecutable(exe, cwd); } catch (error) { plan.reason = messageOf(error); }
+  plan.rawExe = exe;
+  try { plan.command[0] = resolveExecutable(exe, extra.resolveCwd ?? cwd); } catch (error) { plan.reason = messageOf(error); }
   return plan;
 }
 
@@ -718,7 +874,8 @@ async function readTerminalTail(address) {
 async function spawnTerminal(plan, parent) {
   if (plan.reason) throw new CliError(plan.reason);
   const machine = loadMachineConfigSync();
-  const envEntries = Object.entries(machine.env ?? {})
+  const mergedEnv = { ...(machine.env ?? {}), ...(plan.extraEnv ?? {}) };
+  const envEntries = Object.entries(mergedEnv)
     .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     .map(([key, value]) => `${key}=${value}`);
   const inner = envEntries.length > 0 ? ['/usr/bin/env', ...envEntries, ...plan.command] : plan.command;
@@ -800,13 +957,13 @@ async function listOverlayTools(overlayDir) {
     .map(name => join(dir, name));
 }
 
-async function writeBrief(role, plan, snapshot, overlayDir, task, parent = null) {
+async function writeBrief(role, plan, snapshot, overlayDir, task, parent = null, { projectRoot = plan.cwd, roleServers = [] } = {}) {
   const runId = plan.labels[runLabel];
   const list = (label, values) => values.length ? `\n## ${label}\n${values.map(value => `- ${value}`).join('\n')}\n` : '';
   const trimmedTask = task.trim();
   const taskSection = trimmedTask || `Stand by for instructions from ${parent ? `parent (${parent})` : 'the operator'}. Read this brief and any project overlay files so you are ready, then wait without reporting a missing task.`;
   const resolvedSkills = await Promise.all((role.skills ?? []).map(async name => {
-    const skillFile = await resolveSkillPath(name, plan.cwd);
+    const skillFile = await resolveSkillPath(name, projectRoot);
     return skillFile ? `${name} -> ${skillFile}` : name;
   }));
   const userToolsFile = toolsPath();
@@ -815,13 +972,22 @@ async function writeBrief(role, plan, snapshot, overlayDir, task, parent = null)
   const contextFiles = [
     ...(hasUserTools ? [`${userToolsFile} (global verified CLI/script playbook)`] : []),
     join(overlayDir, 'shared.md'),
-    join(overlayDir, 'roles', `${role.id}.md`),
+    join(overlayDir, 'roles', `${role.templateId ?? role.id}.md`),
     join(overlayDir, 'tools/README.md'),
     ...overlayScripts.map(file => `${file} (project helper script)`),
   ];
-  const brief = `# ${role.title} (${role.id})\n\nRun: ${runId}\nProject: ${plan.cwd}\nPreset snapshot: ${snapshot}\n`
+  const serverLines = roleServers.map(srv => {
+    const urlPart = srv.urls?.length ? srv.urls.join(', ') : (srv.port ? `http://127.0.0.1:${srv.port}` : '(discover via hc-team servers)');
+    const portPart = srv.port ? `PORT=${srv.port}, ` : '';
+    return `${srv.id}: ${urlPart} (${portPart}cwd=${srv.cwd})`;
+  });
+  const workspaceMeta = plan.worktree
+    ? `Worktree: ${plan.cwd}\nMain checkout: ${projectRoot}\n`
+    : `Project: ${plan.cwd}\n`;
+  const brief = `# ${role.title} (${role.id})\n\nRun: ${runId}\n${workspaceMeta}Preset snapshot: ${snapshot}\n`
     + `\n## Task\n${taskSection}\n\n## Role instructions\n${role.instructions}\n`
     + `\n## Mode\n${role.readOnly ? 'Read-only: inspect and report; do not edit project files.' : 'Make changes only within the task and assigned scope.'}\n`
+    + list('Dedicated server(s) for this role', serverLines)
     + list('Preferred tools & scripts (use first)', role.tools ?? [])
     + list('Skills (read SKILL.md before ad-hoc commands)', resolvedSkills)
     + list('Ownership', role.owns)
@@ -905,21 +1071,46 @@ async function launch(id, options) {
   if (preset.id !== id) throw new CliError(`Run ${runId} belongs to preset ${preset.id}, not ${id}`);
   const prior = existing && !options['dry-run'] ? await listTerminals(runId) : [];
   if (prior.some(t => t.labels?.[cwdLabel] !== projectRoot)) throw new CliError(`Run ${runId} is already in a different project`);
-  let selected = preset.roles.filter(role => role.default);
-  if (options.roles !== undefined) {
-    const byId = new Map(preset.roles.map(role => [role.id, role]));
-    selected = [...new Set(options.roles.split(',').map(id => id.trim()))].map(role => {
-      if (!byId.has(role)) throw new CliError(`Unknown role ${role} in preset ${id}`);
-      return byId.get(role);
-    });
-  }
-  const context = { runId, id, projectRoot, parent };
-  const servers = options['with-servers'] ? preset.servers.map(row => ({
-    ...planTerminal(row, serverLabel, context), ready: false, urls: [],
-  })) : [];
-  const roles = selected.map(role => ({
-    ...planTerminal(role, roleLabel, context), sent: false, briefPath: join(runDir, 'briefs', `${role.id}-${randomBytes(3).toString('hex')}.md`),
-  }));
+  const selected = parseRoleSelection(options.roles, preset, id, { allowScaledInstance: Boolean(existing) });
+  const usedNames = new Set(prior.map(t => t.name).filter(Boolean));
+  const context = { runId, id, projectRoot, parent, usedNames };
+  const roles = selected.map(role => {
+    const worktree = role.worktree ? join(runDir, 'worktrees', role.id) : null;
+    return {
+      ...planTerminal(role, roleLabel, context, { cwd: worktree ?? projectRoot, worktree, resolveCwd: projectRoot }),
+      sent: false,
+      briefPath: join(runDir, 'briefs', `${role.id}-${randomBytes(3).toString('hex')}.md`),
+    };
+  });
+  const ownServerPairs = options['with-servers']
+    ? selected.flatMap((role, idx) => role.ownServer ? preset.servers.map(srv => ({ role, plan: roles[idx], srv })) : [])
+    : [];
+  const needSharedServers = Boolean(options['with-servers']) && (!ownServerPairs.length || selected.some(role => !role.ownServer));
+  const freshOwnCount = ownServerPairs.filter(({ plan: rolePlan, srv }) => !prior.some(t => t.labels?.[serverLabel] === `${srv.id}-${rolePlan.id}`)).length;
+  const allocatedPorts = await allocateFreePorts(freshOwnCount);
+  let portIdx = 0;
+  const servers = [
+    ...(needSharedServers ? preset.servers.map(row => ({
+      ...planTerminal(row, serverLabel, context), ready: false, urls: [],
+    })) : []),
+    ...ownServerPairs.map(({ plan: rolePlan, srv }) => {
+      const serverIdName = `${srv.id}-${rolePlan.id}`;
+      const reused = prior.some(t => t.labels?.[serverLabel] === serverIdName);
+      const port = reused ? undefined : allocatedPorts[portIdx++];
+      const serverRow = { ...srv, id: serverIdName };
+      return {
+        ...planTerminal(serverRow, serverLabel, context, {
+          cwd: resolve(rolePlan.cwd, srv.cwd ?? '.'),
+          resolveCwd: resolve(projectRoot, srv.cwd ?? '.'),
+          port,
+          forRole: rolePlan.id,
+          ...(port ? { extraEnv: { PORT: String(port), HC_TEAM_PORT: String(port) } } : {}),
+        }),
+        ready: false,
+        urls: [],
+      };
+    }),
+  ];
   const result = { runId, presetId: id, projectRoot, parent, runDir, servers, roles };
   if (options['dry-run']) return result;
   if (!existing) {
@@ -930,6 +1121,30 @@ async function launch(id, options) {
   }
   const locksDir = join(runDir, 'locks');
   await Promise.all([mkdir(join(runDir, 'briefs'), { recursive: true }), mkdir(locksDir, { recursive: true })]);
+  await Promise.all(roles.map(async plan => {
+    if (!plan.worktree || plan.reason) return;
+    try {
+      await ensureWorktree(projectRoot, runId, plan.id);
+    } catch (error) {
+      plan.reason = messageOf(error);
+      for (const srv of servers) {
+        if (srv.forRole === plan.id && !srv.reason) srv.reason = `worktree failed: ${plan.reason}`;
+      }
+    }
+  }));
+  // Re-resolve per-role server executables against their actual worktree cwd now that worktrees exist.
+  for (const srv of servers) {
+    if (!srv.forRole || !srv.rawExe) continue;
+    const rolePlan = roles.find(r => r.id === srv.forRole);
+    if (rolePlan?.worktree && !rolePlan.reason) {
+      try {
+        srv.command[0] = resolveExecutable(srv.rawExe, srv.cwd);
+        srv.reason = null;
+      } catch (error) {
+        srv.reason = messageOf(error);
+      }
+    }
+  }
   await Promise.all(servers.map(async plan => {
     const server = prior.find(t => t.labels?.[serverLabel] === plan.id);
     if (server) {
@@ -956,7 +1171,8 @@ async function launch(id, options) {
         plan.address = active.address;
         throw new CliError('Role is already live; stop that terminal before replacing it');
       }
-      await writeBrief(selected[index], plan, snapshot, overlayPath(projectRoot, id), task, parent);
+      const roleServers = servers.filter(srv => srv.forRole === plan.id);
+      await writeBrief(selected[index], plan, snapshot, overlayPath(projectRoot, id), task, parent, { projectRoot, roleServers });
       await spawnTerminal(plan, parent);
       await waitForRole(plan.address);
       await delay(800);
@@ -999,8 +1215,15 @@ async function launch(id, options) {
   }
   return {
     ...result,
-    servers: servers.map(({ id, address, name, ready, urls, reason }) => ({ id, address, name, ready, urls, reason })),
-    roles: roles.map(({ id, address, name, sent, started, reason, briefPath }) => ({ id, address, name, sent, started, reason, briefPath })),
+    servers: servers.map(({ id, address, name, ready, urls, reason, port, forRole }) => ({
+      id, address, name, ready, urls, reason,
+      ...(port ? { port } : {}),
+      ...(forRole ? { forRole } : {}),
+    })),
+    roles: roles.map(({ id, address, name, sent, started, reason, briefPath, worktree }) => ({
+      id, address, name, sent, started, reason, briefPath,
+      ...(worktree ? { worktree } : {}),
+    })),
   };
 }
 
@@ -1019,10 +1242,14 @@ async function send(to, summary, options) {
   const sender = inRun.find(t => t.labels[roleLabel] === from);
   if (!sender) throw new CliError(`No live sender role ${from} in run ${runId}`);
   const preset = await readSnapshot(join(runPath(runId), 'preset.json'));
-  const role = preset.roles.find(r => r.id === from);
+  const role = findRoleSpec(preset, from);
   if (!role) throw new CliError(`Unknown sender role ${from} in run ${runId}`);
-  if (to !== 'parent' && !preset.roles.some(r => r.id === to)) throw new CliError(`Unknown target role ${to} in run ${runId}`);
-  if (to !== 'parent' && !role.talksTo.includes(to)) process.stderr.write(`Warning: ${from}.talksTo does not include ${to}\n`);
+  const targetRole = to === 'parent' ? null : findRoleSpec(preset, to);
+  if (to !== 'parent' && !targetRole) throw new CliError(`Unknown target role ${to} in run ${runId}`);
+  const siblingScalable = targetRole && role.scalable && role.id === targetRole.id && from !== to;
+  if (to !== 'parent' && !siblingScalable && !role.talksTo.includes(to) && !role.talksTo.includes(targetRole.id)) {
+    process.stderr.write(`Warning: ${from}.talksTo does not include ${to}\n`);
+  }
   const event = { ts: new Date().toISOString(), from, to, kind, summary };
   if (options.artifact !== undefined) event.artifact = options.artifact;
   const parent = sender.labels[parentLabel];
