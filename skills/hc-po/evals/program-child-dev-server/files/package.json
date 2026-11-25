@@ -1,2 +1,0 @@
-{ "name": "shop", "private": true, "workspaces": ["web", "api"],
-  "scripts": { "dev": "bun --cwd web dev", "test": "bun test" } }

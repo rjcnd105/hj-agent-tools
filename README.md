@@ -7,6 +7,7 @@ External skills and agent settings stay in the dotfiles repository. This plugin 
 ## Layout
 
 - `tools/<name>/` is a `git subtree` copy of the tool's own repository. Edit the tool there and pull it here. Never edit it in this repository.
+- `crates/<name>/` holds self-contained Rust CLI tools that live directly in this repository, such as `crates/last30/`.
 - `herdr/<mod>/` holds personal Herdr mods (`hj-agents`, `hj-changes`, `hj-files`, `hj-menu`, `hj-pane`, `hj-review`, `hj-tabs`, `hj-team`). `herdr/lib/mod-config.js` holds the shared per-mod config resolver, and `herdr/lib/shown.js` tells a mod whether its layout block is on screen.
 - `external/<kind>/<name>/` holds tools that run inside another app, grouped by host, such as `external/chrome-extensions/` and `external/obsidian-plugins/`. They have no upstream and live here.
 - `skills/<name>/SKILL.md` tells agents when and how to use the tool.

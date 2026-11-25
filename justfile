@@ -40,6 +40,8 @@ build:
     mkdir -p "{{bin_dir}}"
     install -m 755 tools/simple-pr/target/release/simple-pr "{{bin_dir}}/simple-pr.tmp"
     mv -f "{{bin_dir}}/simple-pr.tmp" "{{bin_dir}}/simple-pr"
+    cargo build --release --manifest-path crates/last30/Cargo.toml
+    tmp="$(mktemp "{{bin_dir}}/.last30.XXXXXX")" && install -m 755 crates/last30/target/release/last30 "$tmp" && mv -f "$tmp" "{{bin_dir}}/last30"
     cargo build --release --manifest-path external/chrome-extensions/ego-recorder/Cargo.toml
     install -m 755 external/chrome-extensions/ego-recorder/target/release/ego-rec "{{bin_dir}}/ego-rec.tmp"
     mv -f "{{bin_dir}}/ego-rec.tmp" "{{bin_dir}}/ego-rec"

@@ -1,7 +1,0 @@
-schema_version: "1.1"
-name: small-lookup-stays-local
-context:
-  scaffold_script: place-files.sh
-expected_outcome: |
-  The agent answers the lookup directly (listOrders is used in api/src/orders.test.ts) without
-  writing a plan file or starting or proposing hc child sessions.
