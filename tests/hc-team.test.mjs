@@ -656,13 +656,18 @@ test('machine config resolves per-machine executables and injects env; launch --
   const launched = box.json(['launch', 'example', '--parent', 'tparent', '--notify-parent']);
   assert.equal(launched.roles[0].sent, true);
   assert.equal(launched.parentNotified, true);
-  assert.match(readFileSync(launched.roles[0].briefPath, 'utf8'), /Stand by for instructions from parent \(tparent\)/);
+  const brief = readFileSync(launched.roles[0].briefPath, 'utf8');
+  assert.match(brief, /Stand by for instructions from parent \(tparent\)/);
+  assert.match(brief, /## Lifecycle\nResident teammate for run .* until the team is disbanded .* or parent \(tparent\) closes/);
   const log = readLog(box.log);
   const runArgs = log.find(row => row.args[0] === 'run').args;
+  assert.ok(runArgs.includes('--parent') && runArgs.includes('tparent') && !runArgs.includes('--outlive-parent'));
   assert.deepEqual(runArgs.slice(runArgs.indexOf('--') + 1), ['/usr/bin/env', 'USER_HOST=lab-box', join(customDir, 'alt-agent'), '--fast']);
   const parentSend = log.find(row => row.args[0] === 'send' && row.args.at(-2) === 'tparent');
   assert.ok(parentSend);
-  assert.match(parentSend.args.at(-1), /Active roles:\n- dev \(tdev\)/);
+  assert.match(parentSend.args.at(-1), /Active resident roles:\n- dev \(tdev\)/);
+  assert.match(parentSend.args.at(-1), /Do NOT `hc kill` \/ `hc rm` them after finishing a task/);
+  assert.match(parentSend.args.at(-1), /parent session closes/);
 });
 
 test('login shell probe parses sentinel PATH past stdout noise and spawnTerminal wraps command in user shell exec', t => {

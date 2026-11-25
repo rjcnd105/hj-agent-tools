@@ -1213,6 +1213,9 @@ export default class Team extends View {
         .child(div().flex_1())
         .child(action(t, "launch", this.launching ? "Launching…" : (totalInstances > 1 ? `Launch (${totalInstances})` : "Launch"),
           (_e, cx) => this.launch(item, parent, cx), { primary: true, disabled: !canLaunch })))
+      .child(div().text_size(10.5).text_color(t.dim).child(parent
+        ? "선택된 역할은 즉시 생성되어 팀 해체(Stop) 또는 부모 종료 시까지 상주합니다."
+        : "선택된 역할은 즉시 생성되어 팀 해체(Stop) 시까지 상주합니다."))
       .when(!this.context.cwd, el => el.child(meta(t, "Launch and project docs require a local project folder.")));
   }
 
@@ -1348,6 +1351,7 @@ export default class Team extends View {
         return card(t)
           .child(h_flex().gap(8).items_center()
             .child(div().flex_1().min_w(0).truncate().font_semibold().child(`${group.presetId ?? "Team"} · #${group.runId}`))
+            .when(Boolean(group.parent), el => el.child(badge(t, `parent ${group.parent}`)))
             .child(action(t, `stop-${group.runId}`, "Stop", () => this.confirm("confirm-stop", group.runId), { danger: true })))
           .children(group.roles.map(role => row(role, false)))
           .children(group.servers.map(server => row(server, true)))

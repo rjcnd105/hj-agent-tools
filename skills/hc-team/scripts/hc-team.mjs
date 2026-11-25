@@ -984,9 +984,13 @@ async function writeBrief(role, plan, snapshot, overlayDir, task, parent = null,
   const workspaceMeta = plan.worktree
     ? `Worktree: ${plan.cwd}\nMain checkout: ${projectRoot}\n`
     : `Project: ${plan.cwd}\n`;
+  const lifecycleLine = parent
+    ? `Resident teammate for run ${runId}: stay alive and ready for follow-up tasks until the team is disbanded (\`hc-team stop ${runId}\`) or parent (${parent}) closes. After reporting a completed task via \`hc-team send\`, do not exit or close this session—wait for the next instruction.`
+    : `Resident teammate for run ${runId}: stay alive and ready for follow-up tasks until the team is disbanded (\`hc-team stop ${runId}\`). After reporting a completed task via \`hc-team send\`, do not exit or close this session—wait for the next instruction.`;
   const brief = `# ${role.title} (${role.id})\n\nRun: ${runId}\n${workspaceMeta}Preset snapshot: ${snapshot}\n`
     + `\n## Task\n${taskSection}\n\n## Role instructions\n${role.instructions}\n`
     + `\n## Mode\n${role.readOnly ? 'Read-only: inspect and report; do not edit project files.' : 'Make changes only within the task and assigned scope.'}\n`
+    + `\n## Lifecycle\n${lifecycleLine}\n`
     + list('Dedicated server(s) for this role', serverLines)
     + list('Preferred tools & scripts (use first)', role.tools ?? [])
     + list('Skills (read SKILL.md before ad-hoc commands)', resolvedSkills)
@@ -1200,9 +1204,10 @@ async function launch(id, options) {
     const readyServers = servers.filter(srv => srv.urls?.length).map(srv => `- ${srv.id}: ${srv.urls.join(', ')}`);
     const parentMessage = [
       `[hc-team] ${existing ? 'Added roles to' : 'Launched'} ${preset.name} (${id}) · run #${runId}`,
-      'Active roles:', ...readyRoles,
+      'Active resident roles:', ...readyRoles,
       ...(readyServers.length ? ['Servers:', ...readyServers] : []),
       ...(failedRoles.length ? ['Unavailable:', ...failedRoles] : []),
+      `These teammates are resident sessions for run #${runId} and stay alive until the team is disbanded (\`hc-team stop ${runId}\`) or this parent session closes. Do NOT \`hc kill\` / \`hc rm\` them after finishing a task and do NOT spawn ad-hoc sub-sessions/subagents for roles already active here—reuse them via \`hc-team send <role> "<summary>" --kind handoff\`.`,
       `Follow the user's next message in this session and coordinate these teammates per preset ${id} (\`hc-team send <role> "<summary>" --kind handoff\`, \`hc-team status ${runId}\`, \`hc-team stop ${runId}\`).`,
     ].join('\n');
     try {
